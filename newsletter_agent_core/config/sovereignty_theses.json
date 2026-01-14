@@ -1,0 +1,123 @@
+{
+  "version": "1.0",
+  "last_updated": "2025-12-19",
+  "language": "en",
+  "theses": [
+    {
+      "id": 1,
+      "title": "Delegation is Power Transfer",
+      "text": "Delegation to agents is not automation; it is the surrender of deterministic policy to stochastic systems.",
+      "category": "control",
+      "keywords": ["delegation", "power", "automation", "deterministic", "stochastic", "control"]
+    },
+    {
+      "id": 2,
+      "title": "Efficiency ≠ Sovereignty",
+      "text": "Performance and control are now divergent variables.",
+      "category": "tradeoffs",
+      "keywords": ["efficiency", "sovereignty", "performance", "control", "tradeoffs"]
+    },
+    {
+      "id": 3,
+      "title": "Virtue is Survival",
+      "text": "Ethics is an insurance policy against agentic reputational collapse, not a growth lever.",
+      "category": "ethics",
+      "keywords": ["virtue", "ethics", "survival", "reputation", "collapse"]
+    },
+    {
+      "id": 4,
+      "title": "Updates are Economic Events",
+      "text": "Model updates are third-party market interventions, not maintenance.",
+      "category": "dependencies",
+      "keywords": ["updates", "economic", "model", "third-party", "intervention", "maintenance"]
+    },
+    {
+      "id": 5,
+      "title": "Exit is a Technical Mirage",
+      "text": "You can export data, but not reasoning. Distillation is the only partial exit.",
+      "category": "lock-in",
+      "keywords": ["exit", "data", "reasoning", "distillation", "lock-in"]
+    },
+    {
+      "id": 6,
+      "title": "Survivability > Exit",
+      "text": "The metric is \"What runs when cognition degrades?\" not \"Can we leave?\"",
+      "category": "resilience",
+      "keywords": ["survivability", "exit", "cognition", "degradation", "resilience"]
+    },
+    {
+      "id": 7,
+      "title": "Update Authority is the Chokepoint",
+      "text": "Who controls the weights controls the business.",
+      "category": "control",
+      "keywords": ["update", "authority", "weights", "control", "business"]
+    },
+    {
+      "id": 8,
+      "title": "Hybrid is Structural",
+      "text": "Edge = Execution/Privacy. Cloud = Reasoning/Scale. This is permanent.",
+      "category": "architecture",
+      "keywords": ["hybrid", "edge", "cloud", "execution", "privacy", "reasoning", "scale"]
+    },
+    {
+      "id": 9,
+      "title": "Procurement is Enforcement",
+      "text": "Only buying power forces architectural sovereignty.",
+      "category": "procurement",
+      "keywords": ["procurement", "buying", "power", "enforcement", "sovereignty"]
+    },
+    {
+      "id": 10,
+      "title": "Habits Persist by UX",
+      "text": "Sovereignty fails if the UX is inferior to the locked-in alternative.",
+      "category": "adoption",
+      "keywords": ["habits", "UX", "user experience", "adoption", "lock-in"]
+    },
+    {
+      "id": 11,
+      "title": "The Agentic Divide",
+      "text": "Sovereignty is distributed by technical literacy and infrastructure access.",
+      "category": "inequality",
+      "keywords": ["agentic", "divide", "literacy", "infrastructure", "access", "inequality"]
+    },
+    {
+      "id": 12,
+      "title": "Democratic Sovereignty is Non-Default",
+      "text": "It must be engineered; the state prioritizes industrial survival.",
+      "category": "policy",
+      "keywords": ["democratic", "sovereignty", "engineered", "state", "policy"]
+    },
+    {
+      "id": 13,
+      "title": "Retail = Governor of Cognition",
+      "text": "Retailers are now certifiers of agentic outcomes, not just merchants.",
+      "category": "retail",
+      "keywords": ["retail", "governor", "cognition", "certifiers", "outcomes"]
+    },
+    {
+      "id": 14,
+      "title": "Context is Shelf Space",
+      "text": "Visibility depends on retrieval context, not physical placement.",
+      "category": "discovery",
+      "keywords": ["context", "shelf", "space", "visibility", "retrieval", "discovery"]
+    }
+  ],
+  "filtering": {
+    "default_threshold": 0.60,
+    "min_aligned_theses": 1,
+    "modes": {
+      "strict": {
+        "threshold": 0.75,
+        "description": "High confidence filtering - only content strongly aligned with theses"
+      },
+      "balanced": {
+        "threshold": 0.60,
+        "description": "Moderate filtering - balanced approach to content alignment"
+      },
+      "exploratory": {
+        "threshold": 0.40,
+        "description": "Permissive filtering - broader content discovery"
+      }
+    }
+  }
+}

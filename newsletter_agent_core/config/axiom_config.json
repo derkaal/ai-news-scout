@@ -1,0 +1,137 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2026-01-14",
+  "language": "en",
+  "description": "European Newsletter Axiom Checker - 10 non-negotiable axioms for evaluating newsletter items",
+  
+  "axioms": [
+    {
+      "id": 1,
+      "title": "Legitimacy is fragile",
+      "description": "Political and social legitimacy cannot be assumed; it must be continuously earned through transparent, accountable processes",
+      "keywords": ["legitimacy", "public acceptance", "trust", "accountability", "transparency", "backlash", "consent"]
+    },
+    {
+      "id": 2,
+      "title": "Adjustment must be credible",
+      "description": "Regulatory and policy changes must be implementable and enforceable, not just aspirational",
+      "keywords": ["regulation", "enforcement", "implementation", "credibility", "policy", "compliance", "feasibility"]
+    },
+    {
+      "id": 3,
+      "title": "Errors must carry cost",
+      "description": "Systems must have meaningful consequences for failures to ensure accountability",
+      "keywords": ["accountability", "consequences", "liability", "penalties", "enforcement", "sanctions", "responsibility"]
+    },
+    {
+      "id": 4,
+      "title": "Knowledge is dispersed and tacit",
+      "description": "Critical knowledge exists across organizations and individuals, not centralized; local context matters",
+      "keywords": ["distributed knowledge", "local expertise", "tacit knowledge", "decentralization", "context", "expertise"]
+    },
+    {
+      "id": 5,
+      "title": "Incentives dominate intentions",
+      "description": "Actual behavior follows incentive structures, not stated goals or good intentions",
+      "keywords": ["incentives", "behavior", "motivation", "alignment", "game theory", "rational choice", "self-interest"]
+    },
+    {
+      "id": 6,
+      "title": "Competition law is Europe's operating system",
+      "description": "EU competition and state-aid rules fundamentally constrain what is politically and economically possible",
+      "keywords": ["competition law", "antitrust", "state aid", "EU regulation", "market rules", "DMA", "DSA"]
+    },
+    {
+      "id": 7,
+      "title": "AI must augment judgment, not replace it",
+      "description": "AI systems should enhance human decision-making, not eliminate human accountability",
+      "keywords": ["human-in-loop", "augmentation", "judgment", "accountability", "oversight", "human control", "automation"]
+    },
+    {
+      "id": 8,
+      "title": "Architecture determines sustainability",
+      "description": "System design choices (including energy, compute, data flows) determine long-term viability and environmental impact",
+      "keywords": ["architecture", "sustainability", "energy", "infrastructure", "design", "environmental cost", "scalability"]
+    },
+    {
+      "id": 9,
+      "title": "Leverage beats ownership",
+      "description": "Strategic positioning and influence matter more than direct control or ownership",
+      "keywords": ["leverage", "influence", "strategic positioning", "partnerships", "ecosystem", "platform", "network effects"]
+    },
+    {
+      "id": 10,
+      "title": "Symbolism is not execution",
+      "description": "Announcements, commitments, and rhetoric must be distinguished from actual implementation and results",
+      "keywords": ["execution", "implementation", "delivery", "rhetoric", "announcements", "action", "results"]
+    }
+  ],
+  
+  "reality_gates": [
+    {
+      "status": "CONFIRMED",
+      "description": "Official announcement, primary source, executed change",
+      "requires_full_analysis": true
+    },
+    {
+      "status": "REPORTED",
+      "description": "Reputable reporting, not official",
+      "requires_full_analysis": true
+    },
+    {
+      "status": "RUMOR",
+      "description": "Unconfirmed claim, single source, social media",
+      "requires_full_analysis": false,
+      "default_output": "RUMOR → Needs verification; no structural judgment."
+    },
+    {
+      "status": "OPINION",
+      "description": "Argument, not an event",
+      "requires_full_analysis": true,
+      "analysis_note": "Run axioms against the argument's logic, not the world"
+    },
+    {
+      "status": "ANALYSIS",
+      "description": "Interpretation of trends",
+      "requires_full_analysis": true,
+      "analysis_note": "Run axioms against the argument's logic, not the world"
+    }
+  ],
+  
+  "axiom_judgments": [
+    {
+      "judgment": "ALIGNED",
+      "description": "Item aligns with this axiom"
+    },
+    {
+      "judgment": "TENSION",
+      "description": "Item creates tension with this axiom"
+    },
+    {
+      "judgment": "VIOLATION",
+      "description": "Item violates this axiom"
+    },
+    {
+      "judgment": "N/A",
+      "description": "Axiom not relevant to this item"
+    }
+  ],
+  
+  "filtering": {
+    "modes": {
+      "strict": {
+        "description": "Only items with no violations",
+        "max_violations": 0
+      },
+      "balanced": {
+        "description": "Items with minor tensions acceptable",
+        "max_violations": 1
+      },
+      "exploratory": {
+        "description": "Include items with violations for learning",
+        "max_violations": 3
+      }
+    },
+    "default_mode": "balanced"
+  }
+}
