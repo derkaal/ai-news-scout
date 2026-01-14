@@ -941,42 +941,8 @@ def main():
     # --- Apply Clustering (if enabled and items available) ---
     clustering_result = None
     if all_items_for_sheet:
-        # Convert sheet rows back to item dictionaries for clustering
-        items_for_clustering = []
-        for row in all_items_for_sheet:
-            # Base fields are always at the same positions
-            item_dict = {
-                'master_headline': row[0] if len(row) > 0 else '',
-                'headline': row[1] if len(row) > 1 else '',
-                'short_description': row[2] if len(row) > 2 else '',
-                'source': row[3] if len(row) > 3 else '',
-                'date': row[4] if len(row) > 4 else '',
-                'companies': row[5].split(", ") if len(row) > 5 and row[5] else [],
-                'technologies': row[6].split(", ") if len(row) > 6 and row[6] else []
-            }
-            
-            # Add axiom or legacy fields depending on configuration
-            if AXIOM_ENABLED and axiom_config:
-                # Axiom fields: Reality Status, Reality Reason, Violation Count, Top Violations, Minimal Repairs
-                if len(row) > 7:
-                    item_dict['reality_status'] = row[7]
-                if len(row) > 8:
-                    item_dict['reality_reason'] = row[8]
-                if len(row) > 9:
-                    item_dict['violation_count'] = row[9]
-                if len(row) > 10:
-                    item_dict['top_violations_formatted'] = row[10]
-                if len(row) > 11:
-                    item_dict['minimal_repairs_formatted'] = row[11]
-            else:
-                # Legacy mode: CRM spin is at position 7
-                if len(row) > 7:
-                    item_dict['potential_spin_for_marketing_sales_service_consumers'] = row[7]
-            
-            items_for_clustering.append(item_dict)
-        
-        # Apply clustering
-        clustering_result = apply_clustering_to_items(items_for_clustering)
+        # all_items_for_sheet already contains item dictionaries, use them directly
+        clustering_result = apply_clustering_to_items(all_items_for_sheet)
         
         if clustering_result.get('clustering_applied', False):
             print(f"Clustering applied successfully: "
