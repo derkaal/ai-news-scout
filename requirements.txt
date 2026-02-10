@@ -1,0 +1,26 @@
+# Newsletter Agent Core Dependencies
+
+# Google API and Authentication
+google-api-python-client>=2.0.0
+google-auth-oauthlib>=0.5.0
+google-auth-httplib2>=0.1.0
+google-auth>=2.0.0
+
+# Google Generative AI (Gemini)
+google-generativeai>=0.3.0
+
+# Web scraping and parsing
+beautifulsoup4>=4.9.0
+requests>=2.25.0
+
+# Text processing
+langchain-text-splitters>=0.0.1
+
+# Environment management
+python-dotenv>=0.19.0
+
+# Data handling
+pandas>=1.5.0
+
+# Optional: For clustering functionality, also install:
+# pip install -r requirements_clustering.txt

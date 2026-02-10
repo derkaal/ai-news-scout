@@ -84,16 +84,16 @@ try:
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
         
         # Initialize cheap model for screening (always available)
-        cheap_model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        cheap_model = genai.GenerativeModel("gemini-2.0-flash")
         print(
-            "Configured cheap model (gemini-2.0-flash-exp) for screening"
+            "Configured cheap model (gemini-2.0-flash) for screening"
         )
         
         # Initialize expensive model if needed
         if USE_EXPENSIVE_MODEL_FOR_ANALYSIS:
-            expensive_model = genai.GenerativeModel("gemini-2.5-flash")
+            expensive_model = genai.GenerativeModel("gemini-2.5-pro")
             print(
-                "Configured expensive model (gemini-2.5-flash) "
+                "Configured expensive model (gemini-2.5-pro) "
                 "for detailed analysis"
             )
             global_model_for_tools = expensive_model
