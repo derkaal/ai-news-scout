@@ -1,8 +1,9 @@
 """
 Axiom Configuration Loader
 
-This module provides configuration management for the 10 European axioms
-that guide structural analysis of newsletter items.
+This module provides configuration management for the 12 core belief axioms
+that guide structural analysis of newsletter items through the lens of
+agentic shopping.
 """
 
 import json
@@ -13,9 +14,9 @@ from typing import Dict, List, Optional, Any
 class AxiomConfig:
     """
     Configuration loader for axiom-based analysis.
-    
-    Loads and provides access to the 10 non-negotiable axioms used for
-    structural sanity checking of newsletter items.
+
+    Loads and provides access to the 12 core belief axioms used for
+    structural analysis of newsletter items through the lens of agentic shopping.
     """
     
     def __init__(self, config_path: Optional[Path] = None):
@@ -106,7 +107,7 @@ class AxiomConfig:
         Get a specific axiom by its ID.
         
         Args:
-            axiom_id: The ID of the axiom to retrieve (1-10).
+            axiom_id: The ID of the axiom to retrieve (1-12).
             
         Returns:
             The axiom dictionary if found, None otherwise.
@@ -127,11 +128,11 @@ class AxiomConfig:
     def get_prompt_text(self) -> str:
         """
         Generate formatted prompt text containing all axioms.
-        
+
         Returns:
-            A formatted string containing all 10 axioms, suitable for
+            A formatted string containing all 12 axioms, suitable for
             inclusion in LLM prompts.
-            
+
         Raises:
             RuntimeError: If configuration hasn't been loaded yet.
         """
@@ -139,13 +140,14 @@ class AxiomConfig:
             raise RuntimeError(
                 "Configuration not loaded. Call load() first."
             )
-        
-        lines = ["## THE 10 AXIOMS (NON-NEGOTIABLE)\n"]
+
+        lines = ["## THE 12 AXIOMS (NON-NEGOTIABLE)\n"]
         for axiom in self._axioms:
             lines.append(
-                f"{axiom['id']}. {axiom['title']}."
+                f"{axiom['id']}. {axiom['title']}: "
+                f"{axiom['description']}"
             )
-        
+
         return "\n".join(lines)
     
     def get_reality_gates(self) -> List[Dict[str, Any]]:

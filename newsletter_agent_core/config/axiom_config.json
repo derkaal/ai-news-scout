@@ -1,72 +1,107 @@
 {
-  "version": "1.0.0",
-  "last_updated": "2026-01-14",
+  "version": "2.0.0",
+  "last_updated": "2026-02-10",
   "language": "en",
-  "description": "European Newsletter Axiom Checker - 10 non-negotiable axioms for evaluating newsletter items",
-  
+  "description": "Agentic Shopping Axiom Checker - 12 core beliefs for evaluating newsletter items through the lens of agentic commerce",
+
   "axioms": [
     {
       "id": 1,
-      "title": "Legitimacy is fragile",
-      "description": "Political and social legitimacy cannot be assumed; it must be continuously earned through transparent, accountable processes",
-      "keywords": ["legitimacy", "public acceptance", "trust", "accountability", "transparency", "backlash", "consent"]
+      "title": "Institutions matter more than intent",
+      "description": "Platform rules, marketplace enforcement, and regulatory frameworks determine agentic shopping outcomes — not 'responsible AI commerce' rhetoric",
+      "keywords": ["institutions", "platform rules", "enforcement", "regulation", "marketplace governance", "compliance", "framework"]
     },
     {
       "id": 2,
-      "title": "Adjustment must be credible",
-      "description": "Regulatory and policy changes must be implementable and enforceable, not just aspirational",
-      "keywords": ["regulation", "enforcement", "implementation", "credibility", "policy", "compliance", "feasibility"]
+      "title": "Legitimacy is a hard constraint",
+      "description": "Consumer trust and regulatory acceptance constrain what agentic shopping can achieve; backlash and loss of trust are predictable failure modes",
+      "keywords": ["legitimacy", "consumer trust", "backlash", "acceptance", "trust", "public perception", "regulatory approval"]
     },
     {
       "id": 3,
-      "title": "Errors must carry cost",
-      "description": "Systems must have meaningful consequences for failures to ensure accountability",
-      "keywords": ["accountability", "consequences", "liability", "penalties", "enforcement", "sanctions", "responsibility"]
+      "title": "Adaptability beats ambition",
+      "description": "Agentic shopping systems that cannot be revised, killed, or reversed without humiliation will eventually rot; irreversibility is the enemy",
+      "keywords": ["adaptability", "reversibility", "kill-switch", "sunset clause", "pivot", "flexibility", "iteration"]
     },
     {
       "id": 4,
-      "title": "Knowledge is dispersed and tacit",
-      "description": "Critical knowledge exists across organizations and individuals, not centralized; local context matters",
-      "keywords": ["distributed knowledge", "local expertise", "tacit knowledge", "decentralization", "context", "expertise"]
+      "title": "Errors must be localized and costly",
+      "description": "If agent purchasing failures are socialized, hidden, or narratively reframed, learning stops; someone must feel the downside of being wrong",
+      "keywords": ["error cost", "accountability", "failure localization", "learning", "liability", "consequences", "feedback loops"]
     },
     {
       "id": 5,
-      "title": "Incentives dominate intentions",
-      "description": "Actual behavior follows incentive structures, not stated goals or good intentions",
-      "keywords": ["incentives", "behavior", "motivation", "alignment", "game theory", "rational choice", "self-interest"]
+      "title": "Knowledge is dispersed; central intelligence is a liability",
+      "description": "No single platform can reliably centralize all product, pricing, and preference knowledge; decentralized selection outperforms centralized foresight",
+      "keywords": ["dispersed knowledge", "decentralization", "local context", "product knowledge", "preference data", "market signals", "tacit knowledge"]
     },
     {
       "id": 6,
-      "title": "Competition law is Europe's operating system",
-      "description": "EU competition and state-aid rules fundamentally constrain what is politically and economically possible",
-      "keywords": ["competition law", "antitrust", "state aid", "EU regulation", "market rules", "DMA", "DSA"]
+      "title": "Incentives overpower intentions every time",
+      "description": "If an agentic shopping system rewards conversion, growth, or dominance, it will drift there regardless of stated consumer-first goals",
+      "keywords": ["incentives", "optimization drift", "conversion pressure", "dark patterns", "misalignment", "behavioral economics", "principal-agent"]
     },
     {
       "id": 7,
-      "title": "AI must augment judgment, not replace it",
-      "description": "AI systems should enhance human decision-making, not eliminate human accountability",
-      "keywords": ["human-in-loop", "augmentation", "judgment", "accountability", "oversight", "human control", "automation"]
+      "title": "Rules and markets beat ownership",
+      "description": "Regulatory gravity, standard-setting, and market access matter more than owning the agent stack; leverage beats equity",
+      "keywords": ["regulation", "standards", "market access", "leverage", "interoperability", "open standards", "Brussels Effect"]
     },
     {
       "id": 8,
       "title": "Architecture determines sustainability",
-      "description": "System design choices (including energy, compute, data flows) determine long-term viability and environmental impact",
-      "keywords": ["architecture", "sustainability", "energy", "infrastructure", "design", "environmental cost", "scalability"]
+      "description": "Energy, compute, and material costs of agentic commerce must be enforced at the design level or they will be externalized",
+      "keywords": ["architecture", "sustainability", "compute cost", "energy", "infrastructure", "scalability", "design constraints"]
     },
     {
       "id": 9,
-      "title": "Leverage beats ownership",
-      "description": "Strategic positioning and influence matter more than direct control or ownership",
-      "keywords": ["leverage", "influence", "strategic positioning", "partnerships", "ecosystem", "platform", "network effects"]
+      "title": "AI should narrow the judgment-consequence distance",
+      "description": "Agentic shopping becomes dangerous when it optimizes persuasion, hides accountability, or replaces human purchase intent with emergent behavior",
+      "keywords": ["judgment", "consequence", "persuasion", "accountability", "human intent", "autonomy", "dark patterns", "manipulation"]
     },
     {
       "id": 10,
-      "title": "Symbolism is not execution",
-      "description": "Announcements, commitments, and rhetoric must be distinguished from actual implementation and results",
-      "keywords": ["execution", "implementation", "delivery", "rhetoric", "announcements", "action", "results"]
+      "title": "Symbolism is stabilizing but non-operative",
+      "description": "Ethics boards, responsible AI charters, and consumer protection pledges are decorative unless removing them would alter actual system behavior",
+      "keywords": ["symbolism", "rhetoric", "ethics washing", "compliance theater", "announcements", "execution gap", "decorative governance"]
+    },
+    {
+      "id": 11,
+      "title": "Buy outcomes, not subsidize ambition",
+      "description": "Demand-side mechanisms create discipline in agentic commerce; supply-side subsidies create capture; the state is a poor VC but a powerful customer",
+      "keywords": ["procurement", "demand-side", "outcomes", "subsidy", "state funding", "market discipline", "public purchasing"]
+    },
+    {
+      "id": 12,
+      "title": "Most failures are structural, not ideological",
+      "description": "Bad agentic shopping outcomes come from mismatched incentives, wrong abstraction level, or ignored second-order effects — not from malice or bad values",
+      "keywords": ["structural failure", "incentive mismatch", "abstraction", "second-order effects", "mechanism design", "systems thinking", "root cause"]
     }
   ],
-  
+
+  "regions": [
+    {
+      "id": "US",
+      "label": "United States",
+      "context": "Platform-dominated market; light-touch regulation; Big Tech controls agent infrastructure; consumer data as competitive asset; antitrust enforcement emerging but slow"
+    },
+    {
+      "id": "EU",
+      "label": "European Union",
+      "context": "Regulatory-first approach; AI Act, DMA, DSA as structural constraints; consumer protection tradition; interoperability mandates; smaller platform players; Brussels Effect as leverage"
+    },
+    {
+      "id": "CN",
+      "label": "China",
+      "context": "State-directed platform economy; super-apps as agent infrastructure; social credit integration; domestic data sovereignty; government-aligned AI development; massive scale advantage"
+    },
+    {
+      "id": "ASIA",
+      "label": "Rest of Asia",
+      "context": "Diverse regulatory landscapes; mobile-first commerce (Japan, Korea, SEA); super-app models (Grab, GoTo); emerging AI adoption; varying data protection maturity; cross-border complexity"
+    }
+  ],
+
   "reality_gates": [
     {
       "status": "CONFIRMED",
@@ -82,7 +117,7 @@
       "status": "RUMOR",
       "description": "Unconfirmed claim, single source, social media",
       "requires_full_analysis": false,
-      "default_output": "RUMOR → Needs verification; no structural judgment."
+      "default_output": "RUMOR -> Needs verification; no structural judgment."
     },
     {
       "status": "OPINION",
@@ -97,7 +132,7 @@
       "analysis_note": "Run axioms against the argument's logic, not the world"
     }
   ],
-  
+
   "axiom_judgments": [
     {
       "judgment": "ALIGNED",
@@ -116,7 +151,7 @@
       "description": "Axiom not relevant to this item"
     }
   ],
-  
+
   "filtering": {
     "modes": {
       "strict": {

@@ -51,8 +51,9 @@ SCOPES = [
 GMAIL_LABEL = os.getenv("GMAIL_LABEL", "Newsletters")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 YOUR_INTERESTS = os.getenv("YOUR_INTERESTS",
-    "Agentic AI, AI (general), CRM technology, European AI policy, "
-    "machine learning, cloud computing, data science, Python programming")
+    "Agentic shopping, agentic commerce, AI-driven purchasing, "
+    "AI agents in retail, agentic AI, commerce platforms, "
+    "marketplace AI, conversational commerce")
 
 # Clustering configuration
 ENABLE_CLUSTERING = os.getenv("ENABLE_CLUSTERING", "false").lower() == "true"
@@ -282,7 +283,7 @@ def summarize_and_extract_topics(
 ) -> Dict[str, Any]:
     """
     Analyzes newsletter content to extract relevant headlines, descriptions, source, date,
-    and a potential spin for Agentic CRM in Europe. Handles large inputs by chunking.
+    regional implications, and LinkedIn angles for agentic shopping. Handles large inputs by chunking.
     """
     print(f"Attempting summarization for '{original_subject}'...")
     if not text_content:
@@ -413,8 +414,8 @@ def summarize_and_extract_topics(
                 chunk = chunk[:int(MAX_MODEL_INPUT_TOKENS * 0.9 * 4)]
             
             chunk_prompt = f"""
-Analyze the following text from a newsletter chunk. Focus on information relevant to: "{interests}" (Agentic AI, AI general, CRM technology, European AI policy, machine learning, cloud computing, data science, Python programming).
-Extract only key factual points.
+Analyze the following text from a newsletter chunk. Focus on information relevant to: "{interests}" (agentic shopping, agentic commerce, AI-driven purchasing, AI agents in retail, marketplace AI).
+Extract only key factual points related to agentic shopping and commerce.
 
 Concise Summary (max 3-5 sentences, strictly factual, no commentary):
 ---
@@ -553,15 +554,17 @@ Concise Summary (max 3-5 sentences, strictly factual, no commentary):
                     'master_headline', 'headline', 'short_description',
                     'source', 'date', 'companies', 'technologies',
                     'reality_status', 'reality_reason',
-                    'axiom_check', 'violations'
+                    'axiom_check', 'violations',
+                    'regional_implications', 'linkedin_angle'
                 ]
             else:
                 # Simple extraction mode
                 required_keys = [
                     'master_headline', 'headline', 'short_description',
-                    'source', 'date', 'companies', 'technologies'
+                    'source', 'date', 'companies', 'technologies',
+                    'regional_implications', 'linkedin_angle'
                 ]
-            
+
             if isinstance(item, dict) and all(key in item for key in required_keys):
                 # Format axiom data for easier sheet writing
                 if 'violations' in item and isinstance(item['violations'], dict):
@@ -572,6 +575,13 @@ Concise Summary (max 3-5 sentences, strictly factual, no commentary):
                     item['minimal_repairs_formatted'] = '; '.join(
                         item['violations'].get('minimal_repair', [])
                     )
+                # Format regional implications for sheet writing
+                if 'regional_implications' in item and isinstance(item['regional_implications'], dict):
+                    ri = item['regional_implications']
+                    item['region_us'] = ri.get('US') or ''
+                    item['region_eu'] = ri.get('EU') or ''
+                    item['region_cn'] = ri.get('CN') or ''
+                    item['region_asia'] = ri.get('ASIA') or ''
                 final_extracted_items.append(item)
             else:
                 missing_keys = [k for k in required_keys if k not in item] if isinstance(item, dict) else required_keys
@@ -637,7 +647,7 @@ def write_to_google_sheet(
     print(f"Attempting to write {len(data)} rows to Google Sheet ID: {spreadsheet_id}")
     try:
         service = get_sheets_service()
-        range_name = 'Sheet1!A:Z'
+        range_name = 'Sheet1!A:AZ'
         
         body = {
             'values': data
@@ -669,7 +679,11 @@ def has_headers_in_sheet(spreadsheet_id: str) -> bool:
     try:
         service = get_sheets_service()
         # Dynamically determine range based on expected header count
-        end_column = chr(ord('A') + len(expected_headers) - 1)  # A=0, B=1, etc.
+        col_count = len(expected_headers)
+        if col_count <= 26:
+            end_column = chr(ord('A') + col_count - 1)
+        else:
+            end_column = chr(ord('A') + (col_count - 1) // 26 - 1) + chr(ord('A') + (col_count - 1) % 26)
         range_name = f'Sheet1!A1:{end_column}1'
         
         result = service.spreadsheets().values().get(
@@ -763,12 +777,12 @@ def apply_clustering_to_items(items: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def get_enhanced_headers_with_clustering() -> List[str]:
-    """Get enhanced headers that include axiom and clustering metadata."""
+    """Get enhanced headers that include axiom, regional, and clustering metadata."""
     base_headers = [
         "Story Master Headline", "Headline", "Short description",
         "Source", "Date", "Companies", "Technologies"
     ]
-    
+
     # Add axiom headers if enabled
     if AXIOM_ENABLED and axiom_config:
         axiom_headers = [
@@ -776,10 +790,15 @@ def get_enhanced_headers_with_clustering() -> List[str]:
             "Top Violations", "Minimal Repairs"
         ]
         base_headers.extend(axiom_headers)
-    else:
-        # Legacy mode - just add the CRM angle
-        base_headers.append("Potential spin for Marketing, Sales, Service, Consumers")
-    
+
+    # Add regional and LinkedIn headers (always present in new schema)
+    regional_headers = [
+        "Implication: US", "Implication: EU",
+        "Implication: China", "Implication: Rest of Asia",
+        "LinkedIn Angle"
+    ]
+    base_headers.extend(regional_headers)
+
     # Add clustering headers if enabled
     if ENABLE_CLUSTERING and CLUSTERING_AVAILABLE:
         clustering_headers = [
@@ -787,7 +806,7 @@ def get_enhanced_headers_with_clustering() -> List[str]:
             "Cluster Probability", "Representative Items"
         ]
         return base_headers + clustering_headers
-    
+
     return base_headers
 
 
@@ -795,7 +814,7 @@ def prepare_sheet_row_with_clustering(
     item: Dict[str, Any],
     cluster_summaries: List[Dict[str, Any]] = None
 ) -> List[str]:
-    """Prepare a sheet row with sovereignty and clustering metadata."""
+    """Prepare a sheet row with axiom, regional, and clustering metadata."""
     # Base row data
     master_headline = item.get('master_headline', item.get('headline', 'N/A'))
     headline = item.get('headline', 'N/A')
@@ -804,12 +823,12 @@ def prepare_sheet_row_with_clustering(
     date = item.get('date', 'N/A')
     companies = ", ".join(item.get('companies', []))
     technologies = ", ".join(item.get('technologies', []))
-    
+
     base_row = [
         master_headline, headline, short_description, source,
         date, companies, technologies
     ]
-    
+
     # Add axiom fields if enabled
     if AXIOM_ENABLED and axiom_config:
         reality_status = item.get('reality_status', 'N/A')
@@ -817,16 +836,21 @@ def prepare_sheet_row_with_clustering(
         violation_count = item.get('violation_count', 0)
         top_violations = item.get('top_violations_formatted', 'None')
         minimal_repairs = item.get('minimal_repairs_formatted', 'None')
-        
+
         base_row.extend([
             reality_status, reality_reason, str(violation_count),
             top_violations, minimal_repairs
         ])
-    else:
-        # Legacy mode - add CRM spin
-        spin = item.get('potential_spin_for_marketing_sales_service_consumers', 'N/A')
-        base_row.append(spin)
-    
+
+    # Add regional implications and LinkedIn angle
+    base_row.extend([
+        item.get('region_us', ''),
+        item.get('region_eu', ''),
+        item.get('region_cn', ''),
+        item.get('region_asia', ''),
+        item.get('linkedin_angle', '')
+    ])
+
     # Add clustering metadata if available
     if ENABLE_CLUSTERING and CLUSTERING_AVAILABLE and 'cluster_id' in item:
         cluster_id = item.get('cluster_id', -1)
