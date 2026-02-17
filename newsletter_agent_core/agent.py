@@ -277,6 +277,87 @@ def extract_clean_text(html_content: str) -> str:
     return cleaned_text
 
 
+def _parse_json_safe(raw_text: str, expected_type=None):
+    """
+    Robust JSON parser that handles common LLM output issues:
+    - Markdown code fences around JSON
+    - Unescaped newlines/quotes inside strings
+    - Trailing commas
+    - Single objects when list expected
+
+    Args:
+        raw_text: Raw LLM response text
+        expected_type: Expected top-level type (list, dict, or None for any)
+
+    Returns:
+        Parsed JSON object, or None if parsing fails
+    """
+    if not raw_text or not raw_text.strip():
+        return None
+
+    text = raw_text.strip()
+
+    # Strip markdown code fences
+    if text.startswith("```"):
+        lines = text.split("\n")
+        # Remove first line (```json or ```) and last line (```)
+        if lines[-1].strip() == "```":
+            lines = lines[1:-1]
+        else:
+            lines = lines[1:]
+        text = "\n".join(lines).strip()
+
+    # Try direct parse first
+    try:
+        result = json.loads(text)
+        if expected_type and not isinstance(result, expected_type):
+            if expected_type == list and isinstance(result, dict):
+                return [result]
+        return result
+    except json.JSONDecodeError:
+        pass
+
+    # Try extracting JSON array from text
+    if expected_type == list or expected_type is None:
+        match = re.search(r'\[.*\]', text, re.DOTALL)
+        if match:
+            try:
+                result = json.loads(match.group(0))
+                return result
+            except json.JSONDecodeError:
+                pass
+
+    # Try extracting JSON object from text
+    if expected_type == dict or expected_type is None:
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            try:
+                result = json.loads(match.group(0))
+                if expected_type == list:
+                    return [result]
+                return result
+            except json.JSONDecodeError:
+                pass
+
+    # Last resort: sanitize common issues and retry
+    sanitized = text
+    # Remove trailing commas before ] or }
+    sanitized = re.sub(r',\s*([}\]])', r'\1', sanitized)
+    # Replace literal newlines inside strings (between quotes)
+    # This is a best-effort heuristic
+    try:
+        result = json.loads(sanitized)
+        if expected_type and not isinstance(result, expected_type):
+            if expected_type == list and isinstance(result, dict):
+                return [result]
+        return result
+    except json.JSONDecodeError:
+        pass
+
+    print(f"  - WARNING: _parse_json_safe failed. First 500 chars: {text[:500]}")
+    return None
+
+
 def summarize_and_extract_topics(
     text_content: str,
     interests: str, # This now includes the specific focus areas
@@ -639,13 +720,58 @@ Concise Summary (max 3-5 sentences, strictly factual, no commentary):
         }
 
 
+# Keywords that signal core agentic shopping (transactional, not just AI-adjacent)
+_CORE_KEYWORDS = [
+    'payment', 'wallet', 'transaction', 'purchase', 'purchasing',
+    'checkout', 'buy', 'buying', 'order', 'ordering', 'procurement',
+    'negotiate', 'negotiation', 'bid', 'bidding', 'auction',
+    'agent wallet', 'agent payment', 'agent purchase',
+    'autonomous purchase', 'autonomous buying', 'auto-purchase',
+    'delegated spending', 'spending authority', 'budget delegation',
+    'agent-to-agent', 'machine-to-machine commerce', 'm2m commerce',
+    'agentic checkout', 'agentic transaction', 'agentic procurement',
+]
+
+
+def classify_relevance_tier(item: Dict[str, Any]) -> str:
+    """
+    Classify an item as CORE or ADJACENT based on whether it directly
+    involves transactional agentic shopping mechanics.
+
+    CORE: Directly about payment authority, wallets, autonomous transactions,
+          agent purchasing decisions, agent-to-agent commerce
+    ADJACENT: Related to agentic commerce ecosystem but not directly transactional
+              (e.g., platform infrastructure, regulation, capabilities)
+
+    Args:
+        item: Extracted newsletter item dict
+
+    Returns:
+        "CORE" or "ADJACENT"
+    """
+    # Build a searchable text from key fields
+    searchable = " ".join([
+        item.get('headline', ''),
+        item.get('short_description', ''),
+        item.get('linkedin_angle', ''),
+        " ".join(item.get('technologies', [])),
+    ]).lower()
+
+    for kw in _CORE_KEYWORDS:
+        if kw in searchable:
+            return "CORE"
+
+    return "ADJACENT"
+
+
 def apply_axiom_quality_filter(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Post-axiom filter: require either 3+ axioms with concrete evidence of
-    alignment, OR at least one meaningful TENSION/VIOLATION.
+    Post-axiom filter with multiple criteria:
 
-    Items that don't engage the axiom framework meaningfully are too generic
-    to be worth writing about.
+    1. Axiom engagement: 3+ aligned with evidence OR 1+ tension/violation
+    2. OPINION items with zero violations are rejected (no structural tension)
+    3. Angle quality: linkedin_angle must be >100 chars and not GENERIC_ANGLE
+    4. Substance check: at least one of companies or technologies must be non-empty
 
     Args:
         items: List of extracted items with axiom_check data
@@ -659,15 +785,17 @@ def apply_axiom_quality_filter(items: List[Dict[str, Any]]) -> List[Dict[str, An
     filtered = []
     for item in items:
         axiom_check = item.get('axiom_check', {})
+        reject_reasons = []
+
         if not axiom_check:
-            # No axiom data — let it through (shouldn't happen but be safe)
             item['quality_gate'] = 'NO_DATA'
             filtered.append(item)
             continue
 
-        # Count aligned axioms with substantive reasoning (not just "N/A" or very short)
+        # --- Criterion 1: Axiom engagement ---
         aligned_with_evidence = 0
         tension_violation_count = 0
+        na_count = 0
 
         for axiom_id, axiom_data in axiom_check.items():
             if not isinstance(axiom_data, dict):
@@ -679,20 +807,52 @@ def apply_axiom_quality_filter(items: List[Dict[str, Any]]) -> List[Dict[str, An
                 aligned_with_evidence += 1
             elif judgment in ('TENSION', 'VIOLATION'):
                 tension_violation_count += 1
+            elif judgment == 'N/A':
+                na_count += 1
 
-        # KEEP if: 3+ aligned with evidence OR 1+ tension/violation
-        if aligned_with_evidence >= 3 or tension_violation_count >= 1:
+        axiom_engaged = (aligned_with_evidence >= 3 or tension_violation_count >= 1)
+        if not axiom_engaged:
+            reject_reasons.append(
+                f"weak axiom engagement (aligned={aligned_with_evidence}, "
+                f"tensions_violations={tension_violation_count})"
+            )
+
+        # --- Criterion 2: OPINION with no violations = no structural tension ---
+        reality_status = item.get('reality_status', '')
+        violation_count = item.get('violation_count', 0)
+        if reality_status == 'OPINION' and violation_count == 0:
+            reject_reasons.append("OPINION with zero violations — no structural tension")
+
+        # --- Criterion 3: Angle quality ---
+        linkedin_angle = item.get('linkedin_angle', '')
+        if linkedin_angle == 'GENERIC_ANGLE':
+            reject_reasons.append("GENERIC_ANGLE — no non-obvious take found")
+        elif len(linkedin_angle) < 100:
+            reject_reasons.append(
+                f"weak angle ({len(linkedin_angle)} chars < 100 minimum)"
+            )
+
+        # --- Criterion 4: Substance check ---
+        companies = item.get('companies', [])
+        technologies = item.get('technologies', [])
+        if not companies and not technologies:
+            reject_reasons.append("no companies AND no technologies identified")
+
+        # --- Decision ---
+        if not reject_reasons:
             item['quality_gate'] = 'PASS'
             item['quality_gate_detail'] = (
                 f"aligned={aligned_with_evidence}, "
-                f"tensions_violations={tension_violation_count}"
+                f"tensions_violations={tension_violation_count}, "
+                f"angle_len={len(linkedin_angle)}"
             )
             filtered.append(item)
         else:
+            item['quality_gate'] = 'FAIL'
+            item['quality_gate_detail'] = '; '.join(reject_reasons)
             print(
-                f"  - AXIOM QUALITY FILTER: Rejected '{item.get('headline', 'N/A')}' "
-                f"(aligned_with_evidence={aligned_with_evidence}, "
-                f"tension_violation_count={tension_violation_count})"
+                f"  - QUALITY FILTER: Rejected '{item.get('headline', 'N/A')}' — "
+                f"{'; '.join(reject_reasons)}"
             )
 
     print(f"  - Axiom quality filter: {len(filtered)}/{len(items)} items passed")
@@ -753,7 +913,9 @@ def validate_clusters_with_llm(
                 prompt,
                 generation_config={"response_mime_type": "application/json"}
             )
-            verdict = json.loads(response.text)
+            verdict = _parse_json_safe(response.text or "", expected_type=dict)
+            if verdict is None:
+                raise ValueError("JSON parsing failed for cluster validation response")
             cluster_verdicts[cid] = verdict
             synth = verdict.get('has_synthesis', False)
             print(
@@ -824,21 +986,41 @@ def apply_kill_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
-        verdicts = json.loads(response.text)
+        raw_text = response.text or ""
 
-        # Build a lookup by headline
+        # Robust JSON extraction — handle LLM returning markdown-wrapped JSON
+        verdicts = _parse_json_safe(raw_text, expected_type=list)
+
+        if verdicts is None:
+            print(f"  - WARNING: Kill gate JSON parse failed. Marking all as NEEDS_REVIEW.")
+            for item in items:
+                item['kill_gate'] = 'NEEDS_REVIEW'
+                item['kill_gate_reason'] = 'Kill gate JSON parsing failed'
+            return items
+
+        # Build a lookup by headline (fuzzy match — LLM may truncate headlines)
         verdict_map = {}
         for v in verdicts:
-            verdict_map[v.get('headline', '')] = v
+            if isinstance(v, dict):
+                verdict_map[v.get('headline', '')] = v
 
         survivors = []
         for item in items:
             headline = item.get('headline', 'N/A')
-            verdict = verdict_map.get(headline, {})
-            item['kill_gate'] = verdict.get('verdict', 'KEEP')
-            item['kill_gate_reason'] = verdict.get('reason', '')
+            # Try exact match first, then substring match
+            verdict = verdict_map.get(headline)
+            if verdict is None:
+                for vk, vv in verdict_map.items():
+                    if vk and (vk in headline or headline in vk):
+                        verdict = vv
+                        break
+            if verdict is None:
+                verdict = {}
 
-            if item['kill_gate'] == 'KEEP':
+            item['kill_gate'] = verdict.get('verdict', 'NEEDS_REVIEW')
+            item['kill_gate_reason'] = verdict.get('reason', 'No LLM verdict matched')
+
+            if item['kill_gate'] in ('KEEP', 'NEEDS_REVIEW'):
                 survivors.append(item)
             else:
                 print(
@@ -850,10 +1032,10 @@ def apply_kill_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return survivors
 
     except Exception as e:
-        print(f"  - WARNING: Kill gate LLM call failed: {e}. Passing all items through.")
+        print(f"  - WARNING: Kill gate LLM call failed: {e}. Marking all as NEEDS_REVIEW.")
         for item in items:
-            item['kill_gate'] = 'ERROR'
-            item['kill_gate_reason'] = str(e)
+            item['kill_gate'] = 'NEEDS_REVIEW'
+            item['kill_gate_reason'] = f'Kill gate error: {e}'
         return items
 
 
@@ -963,12 +1145,19 @@ def apply_clustering_to_items(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     
     try:
         print(f"Applying {CLUSTERING_ALGORITHM} clustering to {len(items)} items...")
-        
-        # Initialize clustering orchestrator
+
+        # Initialize clustering orchestrator with tighter segmentation
         config = ClusteringConfig()
         config.default_algorithm = CLUSTERING_ALGORITHM
+        # Ensure granular clusters: small min size, capped max size
+        config.hdbscan.min_cluster_size = 2
+        config.hdbscan.max_cluster_size = 25
+        config.hdbscan.cluster_selection_method = "leaf"
+        # For hierarchical: target reasonable cluster count
+        target_n = max(len(items) // 8, 3)  # ~8 items per cluster
+        config.hierarchical.n_clusters = min(target_n, 20)
         orchestrator = ClusteringOrchestrator(config)
-        
+
         # Perform clustering
         clustering_result = orchestrator.cluster_items(
             items=items,
@@ -976,17 +1165,36 @@ def apply_clustering_to_items(items: List[Dict[str, Any]]) -> Dict[str, Any]:
             algorithm=CLUSTERING_ALGORITHM,
             validate_results=True
         )
-        
+
+        # Post-clustering validation: reject oversized clusters
+        clustered_items = clustering_result["items"]
+        cluster_counts = {}
+        for ci in clustered_items:
+            cid = ci.get('cluster_id', -1)
+            if cid >= 0:
+                cluster_counts[cid] = cluster_counts.get(cid, 0) + 1
+
+        oversized = [cid for cid, cnt in cluster_counts.items() if cnt > 25]
+        if oversized:
+            print(f"  - WARNING: {len(oversized)} oversized cluster(s) detected: "
+                  f"{', '.join(f'Cluster {c}={cluster_counts[c]} items' for c in oversized)}. "
+                  f"Demoting oversized cluster members to noise.")
+            for ci in clustered_items:
+                if ci.get('cluster_id', -1) in oversized:
+                    ci['cluster_id'] = -1
+                    ci['is_noise'] = True
+                    ci['cluster_probability'] = 0.0
+
         print(f"Clustering completed: {clustering_result['total_clusters']} clusters, "
               f"{clustering_result['noise_items']} noise items")
-        
+
         return {
-            "items": clustering_result["items"],
+            "items": clustered_items,
             "clustering_applied": True,
             "clustering_result": clustering_result,
             "performance_stats": orchestrator.get_performance_stats()
         }
-        
+
     except Exception as e:
         print(f"ERROR: Clustering failed: {e}")
         return {
@@ -1019,8 +1227,8 @@ def get_enhanced_headers_with_clustering() -> List[str]:
     ]
     base_headers.extend(regional_headers)
 
-    # Add quality gate headers
-    base_headers.append("Quality Gate")
+    # Add relevance tier and quality gate headers
+    base_headers.extend(["Relevance Tier", "Quality Gate"])
 
     # Add clustering headers if enabled
     if ENABLE_CLUSTERING and CLUSTERING_AVAILABLE:
@@ -1078,7 +1286,8 @@ def prepare_sheet_row_with_clustering(
         item.get('linkedin_angle', '')
     ])
 
-    # Add quality gate field
+    # Add relevance tier and quality gate fields
+    base_row.append(item.get('relevance_tier', 'N/A'))
     base_row.append(item.get('quality_gate', 'N/A'))
 
     # Add clustering metadata if available
@@ -1195,6 +1404,9 @@ def main():
                 # Ensure date is set
                 if not item.get('date') or item.get('date') == 'N/A':
                     item['date'] = current_processing_date
+
+                # Classify relevance tier
+                item['relevance_tier'] = classify_relevance_tier(item)
 
                 # Store the complete item dictionary (not a row array)
                 all_items_for_sheet.append(item)

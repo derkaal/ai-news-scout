@@ -26,12 +26,12 @@ class EmbeddingConfig:
 @dataclass
 class HDBSCANConfig:
     """Configuration for HDBSCAN clustering algorithm."""
-    min_cluster_size: int = 3
+    min_cluster_size: int = 2
     min_samples: int = 2
     cluster_selection_epsilon: float = 0.0
-    max_cluster_size: Optional[int] = None
+    max_cluster_size: int = 25
     metric: str = "euclidean"
-    cluster_selection_method: str = "eom"  # excess of mass
+    cluster_selection_method: str = "leaf"  # leaf produces more granular clusters than eom
     allow_single_cluster: bool = False
     prediction_data: bool = True
 
