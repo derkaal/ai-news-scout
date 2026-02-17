@@ -24,7 +24,9 @@ import google.generativeai as genai
 from newsletter_agent_core.config import AxiomConfig
 from newsletter_agent_core.axiom_prompts import (
     get_axiom_analysis_prompt,
-    get_simple_extraction_prompt
+    get_simple_extraction_prompt,
+    get_cluster_validation_prompt,
+    get_kill_gate_prompt
 )
 
 # Clustering engine imports
@@ -637,6 +639,224 @@ Concise Summary (max 3-5 sentences, strictly factual, no commentary):
         }
 
 
+def apply_axiom_quality_filter(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Post-axiom filter: require either 3+ axioms with concrete evidence of
+    alignment, OR at least one meaningful TENSION/VIOLATION.
+
+    Items that don't engage the axiom framework meaningfully are too generic
+    to be worth writing about.
+
+    Args:
+        items: List of extracted items with axiom_check data
+
+    Returns:
+        Filtered list of items that pass the quality gate
+    """
+    if not AXIOM_ENABLED or not axiom_config:
+        return items
+
+    filtered = []
+    for item in items:
+        axiom_check = item.get('axiom_check', {})
+        if not axiom_check:
+            # No axiom data — let it through (shouldn't happen but be safe)
+            item['quality_gate'] = 'NO_DATA'
+            filtered.append(item)
+            continue
+
+        # Count aligned axioms with substantive reasoning (not just "N/A" or very short)
+        aligned_with_evidence = 0
+        tension_violation_count = 0
+
+        for axiom_id, axiom_data in axiom_check.items():
+            if not isinstance(axiom_data, dict):
+                continue
+            judgment = axiom_data.get('judgment', 'N/A')
+            reason = axiom_data.get('reason', '')
+
+            if judgment == 'ALIGNED' and len(reason) > 10:
+                aligned_with_evidence += 1
+            elif judgment in ('TENSION', 'VIOLATION'):
+                tension_violation_count += 1
+
+        # KEEP if: 3+ aligned with evidence OR 1+ tension/violation
+        if aligned_with_evidence >= 3 or tension_violation_count >= 1:
+            item['quality_gate'] = 'PASS'
+            item['quality_gate_detail'] = (
+                f"aligned={aligned_with_evidence}, "
+                f"tensions_violations={tension_violation_count}"
+            )
+            filtered.append(item)
+        else:
+            print(
+                f"  - AXIOM QUALITY FILTER: Rejected '{item.get('headline', 'N/A')}' "
+                f"(aligned_with_evidence={aligned_with_evidence}, "
+                f"tension_violation_count={tension_violation_count})"
+            )
+
+    print(f"  - Axiom quality filter: {len(filtered)}/{len(items)} items passed")
+    return filtered
+
+
+def validate_clusters_with_llm(
+    items: List[Dict[str, Any]],
+    clustering_result: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """
+    LLM validation step after clustering: verify each cluster can support
+    a genuine synthesis thesis, not just a thematic list.
+
+    Args:
+        items: List of items with cluster metadata
+        clustering_result: Full clustering result dict
+
+    Returns:
+        Items with cluster_synthesis and cluster_thesis fields added
+    """
+    if not clustering_result or not clustering_result.get('clustering_applied', False):
+        return items
+
+    model_to_use = (cheap_model if USE_CHEAP_MODEL_FOR_SCREENING
+                    else global_model_for_tools)
+    if model_to_use is None:
+        print("  - WARNING: No model available for cluster validation")
+        return items
+
+    # Group items by cluster_id
+    clusters: Dict[int, List[Dict[str, Any]]] = {}
+    for item in items:
+        cid = item.get('cluster_id', -1)
+        if cid >= 0:  # Skip noise items
+            clusters.setdefault(cid, []).append(item)
+
+    # Validate each cluster with 2+ items
+    cluster_verdicts: Dict[int, Dict[str, Any]] = {}
+    for cid, cluster_items in clusters.items():
+        if len(cluster_items) < 2:
+            cluster_verdicts[cid] = {
+                'has_synthesis': False,
+                'thesis': '',
+                'reason': 'Single-item cluster'
+            }
+            continue
+
+        # Format cluster items for the prompt
+        items_text = "\n".join(
+            f"- **{ci.get('headline', 'N/A')}**: {ci.get('short_description', 'N/A')}"
+            for ci in cluster_items
+        )
+
+        prompt = get_cluster_validation_prompt(items_text)
+        try:
+            response = model_to_use.generate_content(
+                prompt,
+                generation_config={"response_mime_type": "application/json"}
+            )
+            verdict = json.loads(response.text)
+            cluster_verdicts[cid] = verdict
+            synth = verdict.get('has_synthesis', False)
+            print(
+                f"  - Cluster {cid} ({len(cluster_items)} items): "
+                f"synthesis={'YES' if synth else 'NO'}"
+                f"{' — ' + verdict.get('thesis', '')[:80] if synth else ''}"
+            )
+        except Exception as e:
+            print(f"  - WARNING: Cluster {cid} validation failed: {e}")
+            cluster_verdicts[cid] = {
+                'has_synthesis': False,
+                'thesis': '',
+                'reason': f'Validation error: {e}'
+            }
+
+    # Apply verdicts to items
+    for item in items:
+        cid = item.get('cluster_id', -1)
+        if cid >= 0 and cid in cluster_verdicts:
+            v = cluster_verdicts[cid]
+            item['cluster_synthesis'] = v.get('has_synthesis', False)
+            item['cluster_thesis'] = v.get('thesis', '')
+        else:
+            item['cluster_synthesis'] = None
+            item['cluster_thesis'] = ''
+
+    return items
+
+
+def apply_kill_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Final kill gate: remove items where high relevance + no tensions +
+    generic angle = actually not worth writing about.
+
+    Sends all items to the LLM in one batch for editorial judgment.
+
+    Args:
+        items: List of items that have passed all prior filters
+
+    Returns:
+        Filtered list of items that survived the kill gate
+    """
+    if not items:
+        return items
+
+    model_to_use = (cheap_model if USE_CHEAP_MODEL_FOR_SCREENING
+                    else global_model_for_tools)
+    if model_to_use is None:
+        print("  - WARNING: No model available for kill gate")
+        return items
+
+    # Build a compact representation for the LLM
+    items_for_eval = []
+    for item in items:
+        items_for_eval.append({
+            'headline': item.get('headline', 'N/A'),
+            'short_description': item.get('short_description', 'N/A'),
+            'reality_status': item.get('reality_status', 'N/A'),
+            'violation_count': item.get('violation_count', 0),
+            'linkedin_angle': item.get('linkedin_angle', 'N/A'),
+            'quality_gate_detail': item.get('quality_gate_detail', ''),
+        })
+
+    prompt = get_kill_gate_prompt(json.dumps(items_for_eval, indent=2))
+
+    try:
+        response = model_to_use.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        )
+        verdicts = json.loads(response.text)
+
+        # Build a lookup by headline
+        verdict_map = {}
+        for v in verdicts:
+            verdict_map[v.get('headline', '')] = v
+
+        survivors = []
+        for item in items:
+            headline = item.get('headline', 'N/A')
+            verdict = verdict_map.get(headline, {})
+            item['kill_gate'] = verdict.get('verdict', 'KEEP')
+            item['kill_gate_reason'] = verdict.get('reason', '')
+
+            if item['kill_gate'] == 'KEEP':
+                survivors.append(item)
+            else:
+                print(
+                    f"  - KILL GATE: Removed '{headline}' — "
+                    f"{verdict.get('reason', 'no reason')}"
+                )
+
+        print(f"  - Kill gate: {len(survivors)}/{len(items)} items survived")
+        return survivors
+
+    except Exception as e:
+        print(f"  - WARNING: Kill gate LLM call failed: {e}. Passing all items through.")
+        for item in items:
+            item['kill_gate'] = 'ERROR'
+            item['kill_gate_reason'] = str(e)
+        return items
+
+
 def write_to_google_sheet(
     spreadsheet_id: str,
     data: List[List[str]]
@@ -799,13 +1019,20 @@ def get_enhanced_headers_with_clustering() -> List[str]:
     ]
     base_headers.extend(regional_headers)
 
+    # Add quality gate headers
+    base_headers.append("Quality Gate")
+
     # Add clustering headers if enabled
     if ENABLE_CLUSTERING and CLUSTERING_AVAILABLE:
         clustering_headers = [
             "Cluster ID", "Cluster Size", "Is Noise",
-            "Cluster Probability", "Representative Items"
+            "Cluster Probability", "Representative Items",
+            "Cluster Synthesis", "Cluster Thesis"
         ]
-        return base_headers + clustering_headers
+        base_headers.extend(clustering_headers)
+
+    # Add kill gate headers
+    base_headers.extend(["Kill Gate", "Kill Gate Reason"])
 
     return base_headers
 
@@ -851,16 +1078,19 @@ def prepare_sheet_row_with_clustering(
         item.get('linkedin_angle', '')
     ])
 
+    # Add quality gate field
+    base_row.append(item.get('quality_gate', 'N/A'))
+
     # Add clustering metadata if available
     if ENABLE_CLUSTERING and CLUSTERING_AVAILABLE and 'cluster_id' in item:
         cluster_id = item.get('cluster_id', -1)
         is_noise = item.get('is_noise', False)
         cluster_probability = item.get('cluster_probability', 'N/A')
-        
+
         # Find cluster size and representative items
         cluster_size = 1
         representative_items = ""
-        
+
         if cluster_summaries and cluster_id != -1:
             for summary in cluster_summaries:
                 if summary.get('cluster_id') == cluster_id:
@@ -871,17 +1101,28 @@ def prepare_sheet_row_with_clustering(
                         for rep in rep_items[:2]
                     ])
                     break
-        
+
+        cluster_synthesis = item.get('cluster_synthesis')
+        cluster_thesis = item.get('cluster_thesis', '')
+
         clustering_row = [
             str(cluster_id) if cluster_id != -1 else "NOISE",
             str(cluster_size),
             "Yes" if is_noise else "No",
             f"{cluster_probability:.3f}" if isinstance(cluster_probability, (int, float)) else str(cluster_probability),
-            representative_items
+            representative_items,
+            str(cluster_synthesis) if cluster_synthesis is not None else "N/A",
+            cluster_thesis
         ]
-        
-        return base_row + clustering_row
-    
+
+        base_row.extend(clustering_row)
+
+    # Add kill gate fields
+    base_row.extend([
+        item.get('kill_gate', 'N/A'),
+        item.get('kill_gate_reason', '')
+    ])
+
     return base_row
 
 
@@ -950,69 +1191,86 @@ def main():
                     item['source'] = current_original_sender.split('<')[0].strip()
                 else:
                     item['source'] = current_original_sender if current_original_sender else 'N/A'
-                
+
                 # Ensure date is set
                 if not item.get('date') or item.get('date') == 'N/A':
                     item['date'] = current_processing_date
-                
+
                 # Store the complete item dictionary (not a row array)
                 all_items_for_sheet.append(item)
-            
+
             print(f"  - Added {len(extracted_items_from_llm)} relevant items from '{current_original_subject}' to master list.")
         else:
             print(f"  - Skipping newsletter '{current_original_subject}' (Relevance < 50 or no valid items extracted by LLM).")
 
+    # --- Gate 1: Post-Axiom Quality Filter ---
+    if all_items_for_sheet:
+        pre_filter_count = len(all_items_for_sheet)
+        all_items_for_sheet = apply_axiom_quality_filter(all_items_for_sheet)
+        print(f"Post-axiom quality filter: {len(all_items_for_sheet)}/{pre_filter_count} items passed")
+
     # --- Apply Clustering (if enabled and items available) ---
     clustering_result = None
+    cluster_summaries = []
     if all_items_for_sheet:
         # all_items_for_sheet already contains item dictionaries, use them directly
         clustering_result = apply_clustering_to_items(all_items_for_sheet)
-        
+
         if clustering_result.get('clustering_applied', False):
             print(f"Clustering applied successfully: "
                   f"{clustering_result['clustering_result']['total_clusters']} clusters")
-            
-            # Update items with clustering metadata
-            clustered_items = clustering_result['items']
-            cluster_summaries = clustering_result['clustering_result'].get('cluster_summaries', [])
-            
-            # Rebuild sheet rows with clustering data
-            all_items_for_sheet = []
-            for item in clustered_items:
-                row = prepare_sheet_row_with_clustering(item, cluster_summaries)
-                all_items_for_sheet.append(row)
 
-    # --- Final Writing to Sheet ---
+            # Update items with clustering metadata
+            all_items_for_sheet = clustering_result['items']
+            cluster_summaries = clustering_result['clustering_result'].get('cluster_summaries', [])
+
+            # --- Gate 2: LLM Cluster Validation ---
+            all_items_for_sheet = validate_clusters_with_llm(
+                all_items_for_sheet, clustering_result
+            )
+
+    # --- Gate 3: Final Kill Gate ---
     if all_items_for_sheet:
-        print(f"Total relevant items collected for sheet: {len(all_items_for_sheet)}")
-        
-        # Get headers (with clustering metadata if enabled)
+        pre_kill_count = len(all_items_for_sheet)
+        all_items_for_sheet = apply_kill_gate(all_items_for_sheet)
+        print(f"Kill gate: {len(all_items_for_sheet)}/{pre_kill_count} items survived")
+
+    # --- Prepare sheet rows ---
+    if all_items_for_sheet:
+        sheet_rows = []
+        for item in all_items_for_sheet:
+            row = prepare_sheet_row_with_clustering(item, cluster_summaries)
+            sheet_rows.append(row)
+
+        print(f"Total items for sheet after all gates: {len(sheet_rows)}")
+
+        # Get headers (with all gate metadata)
         headers = get_enhanced_headers_with_clustering()
-        
+
         data_to_write = []
         if not has_headers_in_sheet(GOOGLE_SHEET_ID):
             print("Adding headers to Google Sheet...")
             data_to_write.append(headers)
 
-        data_to_write.extend(all_items_for_sheet)
+        data_to_write.extend(sheet_rows)
 
         write_status = write_to_google_sheet(
             spreadsheet_id=GOOGLE_SHEET_ID,
             data=data_to_write
         )
-        
-        # Add clustering summary to status message
+
+        # Build status message
         status_message = f"Newsletter processing complete. {write_status}."
         if clustering_result and clustering_result.get('clustering_applied', False):
             cr = clustering_result['clustering_result']
             status_message += f" Clustering: {cr['total_clusters']} clusters, {cr['noise_items']} noise items."
         status_message += " Check your Google Sheet."
-        
+
         print(f"Final newsletter processing status: {status_message}")
         return status_message
     else:
-        print("No relevant items extracted from any newsletters based on interests.")
-        return "No relevant items found or processed based on your interests."
+        print("No relevant items survived all quality gates.")
+        return "No items passed all quality gates (relevance, axiom quality, kill gate)."
         
 
 if __name__ == "__main__":
