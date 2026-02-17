@@ -277,11 +277,57 @@ def extract_clean_text(html_content: str) -> str:
     return cleaned_text
 
 
+def _sanitize_json_strings(text: str) -> str:
+    """
+    Fix unescaped newlines, tabs, and control characters inside JSON string
+    values. The LLM often produces multi-line strings that break json.loads().
+
+    Works by walking the text character-by-character, tracking whether we're
+    inside a JSON string (between unescaped double quotes), and replacing
+    raw newlines/tabs with their escaped equivalents.
+    """
+    result = []
+    in_string = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+
+        if ch == '\\' and in_string and i + 1 < len(text):
+            # Escaped character — keep as-is (including \n, \", etc.)
+            result.append(ch)
+            result.append(text[i + 1])
+            i += 2
+            continue
+
+        if ch == '"':
+            in_string = not in_string
+            result.append(ch)
+            i += 1
+            continue
+
+        if in_string:
+            # Replace raw control characters with escaped versions
+            if ch == '\n':
+                result.append('\\n')
+            elif ch == '\r':
+                result.append('\\r')
+            elif ch == '\t':
+                result.append('\\t')
+            else:
+                result.append(ch)
+        else:
+            result.append(ch)
+
+        i += 1
+
+    return ''.join(result)
+
+
 def _parse_json_safe(raw_text: str, expected_type=None):
     """
     Robust JSON parser that handles common LLM output issues:
     - Markdown code fences around JSON
-    - Unescaped newlines/quotes inside strings
+    - Unescaped newlines/quotes inside string values
     - Trailing commas
     - Single objects when list expected
 
@@ -300,61 +346,57 @@ def _parse_json_safe(raw_text: str, expected_type=None):
     # Strip markdown code fences
     if text.startswith("```"):
         lines = text.split("\n")
-        # Remove first line (```json or ```) and last line (```)
         if lines[-1].strip() == "```":
             lines = lines[1:-1]
         else:
             lines = lines[1:]
         text = "\n".join(lines).strip()
 
-    # Try direct parse first
-    try:
-        result = json.loads(text)
+    def _try_parse(s):
+        """Attempt json.loads, return result or None."""
+        try:
+            return json.loads(s)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    def _coerce_type(result):
+        """Coerce result to expected_type if needed."""
         if expected_type and not isinstance(result, expected_type):
             if expected_type == list and isinstance(result, dict):
                 return [result]
         return result
-    except json.JSONDecodeError:
-        pass
 
-    # Try extracting JSON array from text
-    if expected_type == list or expected_type is None:
-        match = re.search(r'\[.*\]', text, re.DOTALL)
+    # Attempt 1: Direct parse
+    result = _try_parse(text)
+    if result is not None:
+        return _coerce_type(result)
+
+    # Attempt 2: Sanitize unescaped newlines inside strings, then parse
+    sanitized = _sanitize_json_strings(text)
+    result = _try_parse(sanitized)
+    if result is not None:
+        return _coerce_type(result)
+
+    # Attempt 3: Extract JSON array/object with regex, then sanitize
+    for pattern in [r'\[.*\]', r'\{.*\}']:
+        match = re.search(pattern, text, re.DOTALL)
         if match:
-            try:
-                result = json.loads(match.group(0))
-                return result
-            except json.JSONDecodeError:
-                pass
+            extracted = match.group(0)
+            result = _try_parse(extracted)
+            if result is not None:
+                return _coerce_type(result)
+            # Try sanitized version of extracted
+            result = _try_parse(_sanitize_json_strings(extracted))
+            if result is not None:
+                return _coerce_type(result)
 
-    # Try extracting JSON object from text
-    if expected_type == dict or expected_type is None:
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            try:
-                result = json.loads(match.group(0))
-                if expected_type == list:
-                    return [result]
-                return result
-            except json.JSONDecodeError:
-                pass
+    # Attempt 4: Remove trailing commas and retry
+    no_trailing = re.sub(r',\s*([}\]])', r'\1', sanitized)
+    result = _try_parse(no_trailing)
+    if result is not None:
+        return _coerce_type(result)
 
-    # Last resort: sanitize common issues and retry
-    sanitized = text
-    # Remove trailing commas before ] or }
-    sanitized = re.sub(r',\s*([}\]])', r'\1', sanitized)
-    # Replace literal newlines inside strings (between quotes)
-    # This is a best-effort heuristic
-    try:
-        result = json.loads(sanitized)
-        if expected_type and not isinstance(result, expected_type):
-            if expected_type == list and isinstance(result, dict):
-                return [result]
-        return result
-    except json.JSONDecodeError:
-        pass
-
-    print(f"  - WARNING: _parse_json_safe failed. First 500 chars: {text[:500]}")
+    print(f"  - WARNING: _parse_json_safe failed. First 300 chars: {text[:300]}")
     return None
 
 
@@ -875,13 +917,17 @@ def apply_pre_kill_filter(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     Deterministic pre-kill-gate filter that removes items which clearly
     don't belong before wasting an LLM call.
 
-    Removes items where ALL of the following are true:
-    - violation_count == 0 (no structural tensions found)
-    - reality_status in {REPORTED, OPINION} (not confirmed news)
-    - No shopping/commerce keywords in headline or description
+    Two-tier filtering:
 
-    These items have no agentic shopping connection and slipped through
-    the initial relevance filter.
+    Tier 1 (hard — any reality status):
+      Remove if BOTH: violation_count == 0 AND relevance_tier == ADJACENT
+      AND no shopping keywords anywhere in the item.
+      These items have no connection to agentic shopping at all.
+
+    Tier 2 (soft — REPORTED/OPINION only):
+      Remove if ALL: violation_count == 0, reality_status in {REPORTED, OPINION},
+      AND no CORE keywords (the strict transactional set).
+      These are weakly-sourced items with no transactional angle.
 
     Args:
         items: List of items that passed the quality gate
@@ -893,28 +939,45 @@ def apply_pre_kill_filter(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for item in items:
         violation_count = item.get('violation_count', 0)
         reality_status = item.get('reality_status', '')
+        relevance_tier = item.get('relevance_tier', 'ADJACENT')
 
-        # Only apply this filter to low-signal items
+        # Build searchable text from core fields
+        searchable = " ".join([
+            item.get('headline', ''),
+            item.get('short_description', ''),
+            " ".join(item.get('technologies', [])),
+        ]).lower()
+
+        has_shopping_keyword = any(kw in searchable for kw in _SHOPPING_KEYWORDS)
+        has_core_keyword = any(kw in searchable for kw in _CORE_KEYWORDS)
+
+        # --- Tier 1: Hard filter — no shopping connection at all ---
         if (violation_count == 0
-                and reality_status in ('REPORTED', 'OPINION')):
-            # Check if any shopping keyword appears in core fields
-            searchable = " ".join([
-                item.get('headline', ''),
-                item.get('short_description', ''),
-            ]).lower()
+                and relevance_tier == 'ADJACENT'
+                and not has_shopping_keyword):
+            print(
+                f"  - PRE-KILL FILTER (T1): Removed '{item.get('headline', 'N/A')}' — "
+                f"zero violations, ADJACENT, no shopping keywords"
+            )
+            item['kill_gate'] = 'PRE_KILL'
+            item['kill_gate_reason'] = (
+                'No violations, ADJACENT tier, no shopping/commerce keywords'
+            )
+            continue
 
-            has_shopping_keyword = any(kw in searchable for kw in _SHOPPING_KEYWORDS)
-
-            if not has_shopping_keyword:
-                print(
-                    f"  - PRE-KILL FILTER: Removed '{item.get('headline', 'N/A')}' — "
-                    f"zero violations, {reality_status}, no shopping keywords"
-                )
-                item['kill_gate'] = 'PRE_KILL'
-                item['kill_gate_reason'] = (
-                    f'No violations, {reality_status}, no shopping/commerce keywords'
-                )
-                continue
+        # --- Tier 2: Soft filter — weak source + no transactional angle ---
+        if (violation_count == 0
+                and reality_status in ('REPORTED', 'OPINION')
+                and not has_core_keyword):
+            print(
+                f"  - PRE-KILL FILTER (T2): Removed '{item.get('headline', 'N/A')}' — "
+                f"zero violations, {reality_status}, no core transactional keywords"
+            )
+            item['kill_gate'] = 'PRE_KILL'
+            item['kill_gate_reason'] = (
+                f'No violations, {reality_status}, no core transactional keywords'
+            )
+            continue
 
         filtered.append(item)
 
@@ -1022,12 +1085,28 @@ def _kill_gate_eval_batch(
     Returns:
         List of verdict dicts, or None if parsing fails
     """
-    prompt = get_kill_gate_prompt(json.dumps(batch_items, indent=2))
+    # Truncate descriptions and angles to reduce token size and JSON complexity
+    compact_batch = []
+    for item in batch_items:
+        compact_batch.append({
+            'headline': item.get('headline', 'N/A'),
+            'short_description': (item.get('short_description', '') or '')[:200],
+            'reality_status': item.get('reality_status', 'N/A'),
+            'violation_count': item.get('violation_count', 0),
+            'linkedin_angle': (item.get('linkedin_angle', '') or '')[:150],
+        })
+
+    prompt = get_kill_gate_prompt(json.dumps(compact_batch, indent=2))
     response = model.generate_content(
         prompt,
         generation_config={"response_mime_type": "application/json"}
     )
-    return _parse_json_safe(response.text or "", expected_type=list)
+    raw = response.text or ""
+    result = _parse_json_safe(raw, expected_type=list)
+    if result is None:
+        # Log the raw response for debugging
+        print(f"    - Kill gate batch raw response ({len(raw)} chars): {raw[:300]}...")
+    return result
 
 
 def _kill_gate_eval_single(item_eval: Dict[str, Any], model) -> Dict[str, Any]:
