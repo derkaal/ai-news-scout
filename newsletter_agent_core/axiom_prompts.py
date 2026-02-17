@@ -31,16 +31,22 @@ Your job is threefold:
 2. Assess **regional implications** where they differ significantly across US, EU, China, and rest-of-Asia
 3. Suggest a **LinkedIn content angle** for a business audience interested in agentic AI
 
-## RELEVANCE FILTER (HARD GATE)
-Only extract items that are **directly relevant to agentic shopping, agentic commerce, or AI-driven purchasing/retail**. This includes:
-- AI agents acting on behalf of consumers or businesses in commercial transactions
-- Platform/marketplace changes that affect how AI agents interact with commerce
-- Regulatory moves that constrain or enable agentic commerce
-- Infrastructure (payments, identity, logistics) that agentic shopping depends on
-- AI capabilities (tool use, planning, negotiation) that enable agentic commerce
-- Competitive moves by companies building agentic shopping systems
+## RELEVANCE FILTER (HARD GATE — STRICT)
+Each item must pass **at least one** of these three tests:
 
-Items about general AI, LLMs, or tech that have NO clear connection to commerce/shopping/retail/purchasing MUST be excluded. Return `[]` if nothing qualifies.
+1. **Autonomous purchasing**: AI agents making, approving, or executing purchase decisions without human-in-the-loop for each transaction
+2. **Transaction authority**: Systems that delegate financial or contractual authority to AI agents — payment rails for agents, procurement delegation, agent wallets, agent-held budgets
+3. **Agent-to-agent commerce**: AI agents negotiating, bidding, or transacting with other AI agents on behalf of principals
+
+**EXPLICIT REJECTIONS — these do NOT qualify unless they specifically enable one of the three tests above:**
+- General AI capabilities (better reasoning, new models, benchmarks, training breakthroughs)
+- AI assistants that recommend but don't transact
+- Chatbots, AI search, AI-powered customer service
+- Productivity tools, copilots, AI analytics dashboards
+- "AI in retail" that is just personalization, demand forecasting, or inventory optimization without agent autonomy
+- Vague "agentic AI" announcements without concrete commerce/transaction mechanics
+
+Return `[]` if nothing qualifies. When in doubt, exclude.
 
 ## CONTEXT
 Agentic shopping is unfolding differently across regions:
@@ -93,12 +99,23 @@ Assess how this item plays out differently across regions. Only include a region
 
 For each relevant region, provide a 1-sentence implication (max 25 words).
 
-## STEP 4 — LINKEDIN ANGLE
-Suggest one LinkedIn post angle for a business audience with strong AI interest. The angle should:
-- Be opinionated and mechanism-focused (not "this is interesting")
-- Connect the news to a structural insight about agentic shopping
-- Sound like the author understands the tech but speaks business
+## STEP 4 — LINKEDIN ANGLE (STRICT QUALITY GATE)
+Suggest one LinkedIn post angle for a business audience with strong AI interest. The angle MUST:
+- Contain a **specific mechanism, prediction, or named tension** — not "this is worth watching"
+- Pass the "I hadn't thought of that" test — if a reader could guess the angle from the headline alone, it's too generic
+- Name a **concrete paradox, second-order effect, or structural contradiction**
 - Be max 2 sentences
+
+**REJECT these patterns** — if your angle matches any of these, replace it with the literal string `GENERIC_ANGLE`:
+- "raises questions about..."
+- "has implications for..."
+- "could disrupt..."
+- "time will tell..."
+- "businesses should pay attention to..."
+- "this is a sign that..."
+- Any angle that merely restates the headline with "and here's why it matters"
+
+If you cannot produce a genuinely non-obvious angle, output `"GENERIC_ANGLE"` — do not force a mediocre one.
 
 ## OUTPUT FORMAT (MANDATORY JSON)
 Return a JSON array where each object represents one news item found in the text:
@@ -149,7 +166,7 @@ Return a JSON array where each object represents one news item found in the text
 - No long explanations. This is a screening gate.
 - If insufficient detail, mark affected axioms as TENSION with "insufficient detail".
 - Never invent facts. Never assume the event occurred.
-- HARD FILTER: Only include items with a clear agentic shopping / agentic commerce connection. General AI news without commerce relevance must be excluded.
+- HARD FILTER: Only include items that pass at least one of the three relevance tests (autonomous purchasing, transaction authority, agent-to-agent commerce). General AI news without concrete transaction/commerce mechanics must be excluded. Prefer returning `[]` over including marginal items.
 - If NO relevant items found, return: `[]`
 
 **Text for Analysis:**
@@ -184,9 +201,14 @@ For each relevant news item identified in the 'Text for Analysis':
 - Extract a list of **Companies** (max 3, e.g., "Google", "OpenAI") directly involved or mentioned in this news item. If none, return empty list `[]`.
 - Extract a list of **Technologies** (max 3, e.g., "Agentic AI", "LLMs", "Commerce AI") directly relevant to this news item. If none, return empty list `[]`.
 - Assess **Regional Implications** for US, EU, China, and Rest of Asia — only where significantly different. Use null for regions with no distinct implication.
-- Suggest a **LinkedIn Angle** — 1-2 sentence opinionated post angle for a business audience interested in agentic AI.
+- Suggest a **LinkedIn Angle** — 1-2 sentence opinionated post angle that names a specific mechanism, paradox, or second-order effect. Must pass the "I hadn't thought of that" test. If you cannot produce a non-obvious angle, output `"GENERIC_ANGLE"`. Do NOT use patterns like "raises questions about...", "has implications for...", "could disrupt...", or "time will tell...".
 
-HARD FILTER: Only include items with a clear connection to agentic shopping, agentic commerce, or AI-driven purchasing/retail. General AI news without commerce relevance must be excluded.
+HARD FILTER: Each item must pass at least one of these three tests:
+1. Autonomous purchasing — AI agents making/executing purchase decisions without human-in-the-loop
+2. Transaction authority — systems delegating financial/contractual authority to AI agents
+3. Agent-to-agent commerce — AI agents negotiating/transacting with other AI agents
+
+General AI capabilities, chatbots, AI search, copilots, recommendation engines, and "AI in retail" without agent transaction autonomy do NOT qualify. Prefer returning [] over including marginal items.
 
 Your output MUST be a structured JSON array of objects. DO NOT include any other text or markdown outside the JSON array.
 
@@ -217,3 +239,80 @@ Text for Analysis:
 {final_text}
 ---
 """
+
+
+def get_cluster_validation_prompt(cluster_items_text: str) -> str:
+    """
+    Generate a prompt to validate whether a cluster of items can support
+    a genuine synthesis thesis, not just a thematic list.
+
+    Args:
+        cluster_items_text: Formatted text of cluster items (headlines + descriptions)
+
+    Returns:
+        Complete prompt string for cluster validation
+    """
+    return f"""You are evaluating whether a cluster of newsletter items can support a **genuine synthesis thesis**.
+
+A synthesis thesis is a non-obvious argument that connects the items and produces an insight that none of them contain individually. It is NOT a summary, not a theme label, and not "these are all about X."
+
+## Items in this cluster:
+{cluster_items_text}
+
+## Your task:
+1. Can these items support a genuine synthesis thesis — a claim that emerges from their combination but isn't stated in any single item?
+2. Or are they just a list of thematically similar but intellectually independent items?
+
+## Rules:
+- A valid thesis must be **falsifiable** — someone could disagree with it
+- "These items show that agentic shopping is growing" is NOT a thesis — it's an observation
+- "These items reveal that platform lock-in is accelerating faster than regulatory response, creating a 12-month window where agent infrastructure becomes irreversible" IS a thesis
+- If the items are too loosely connected or too similar to generate tension, return has_synthesis: false
+
+Return ONLY valid JSON (no markdown, no explanation outside JSON):
+{{
+  "has_synthesis": true or false,
+  "thesis": "One sentence synthesis thesis if true, empty string if false",
+  "reason": "One sentence explaining why synthesis works or fails"
+}}"""
+
+
+def get_kill_gate_prompt(items_json: str) -> str:
+    """
+    Generate a prompt for the final kill gate that removes items
+    that are not genuinely worth writing about.
+
+    Args:
+        items_json: JSON string of items to evaluate
+
+    Returns:
+        Complete prompt string for kill gate evaluation
+    """
+    return f"""You are a ruthless editorial kill gate for a newsletter about agentic commerce (AI agents that autonomously purchase, transact, and negotiate).
+
+Your job is to flag items that passed earlier filters but are still NOT worth writing about.
+
+## Kill criteria — flag as KILL if ANY of these apply:
+1. **Consensus news**: High relevance + no tensions or violations + generic angle = everyone already knows this, nothing to argue about
+2. **Angle failure**: The linkedin_angle is "GENERIC_ANGLE" or could be guessed from the headline alone
+3. **So what?**: A smart reader in agentic commerce would say "yes, and?" — the item states a fact but has no structural tension worth exploring
+4. **Derivative**: The item is a minor update to a story that was interesting when it first broke but no longer merits fresh analysis
+5. **Aspirational**: The item describes what a company *plans* to do or *could* do, without concrete evidence of execution
+
+## Keep criteria — flag as KEEP if ANY of these apply:
+1. Contains a genuine structural tension (two forces pulling in opposite directions)
+2. Reveals a second-order effect that isn't obvious
+3. Shows a concrete mechanism change (not just an announcement)
+4. Would make a reader in agentic commerce change their mental model
+
+## Items to evaluate:
+{items_json}
+
+Return ONLY valid JSON array (no markdown, no explanation outside JSON):
+[
+  {{
+    "headline": "the item's headline",
+    "verdict": "KEEP" or "KILL",
+    "reason": "One sentence explaining the verdict"
+  }}
+]"""
