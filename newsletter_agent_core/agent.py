@@ -859,6 +859,69 @@ def apply_axiom_quality_filter(items: List[Dict[str, Any]]) -> List[Dict[str, An
     return filtered
 
 
+# Broader shopping/commerce keywords for pre-kill-gate check (superset of _CORE_KEYWORDS)
+_SHOPPING_KEYWORDS = _CORE_KEYWORDS + [
+    'shopping', 'commerce', 'retail', 'merchant', 'marketplace',
+    'e-commerce', 'ecommerce', 'store', 'cart', 'price', 'pricing',
+    'consumer', 'buyer', 'seller', 'vendor', 'supplier',
+    'fulfillment', 'delivery', 'logistics', 'supply chain',
+    'agent shopping', 'agentic commerce', 'agentic shopping',
+    'product search', 'product discovery', 'comparison shopping',
+]
+
+
+def apply_pre_kill_filter(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Deterministic pre-kill-gate filter that removes items which clearly
+    don't belong before wasting an LLM call.
+
+    Removes items where ALL of the following are true:
+    - violation_count == 0 (no structural tensions found)
+    - reality_status in {REPORTED, OPINION} (not confirmed news)
+    - No shopping/commerce keywords in headline or description
+
+    These items have no agentic shopping connection and slipped through
+    the initial relevance filter.
+
+    Args:
+        items: List of items that passed the quality gate
+
+    Returns:
+        Filtered list with obviously irrelevant items removed
+    """
+    filtered = []
+    for item in items:
+        violation_count = item.get('violation_count', 0)
+        reality_status = item.get('reality_status', '')
+
+        # Only apply this filter to low-signal items
+        if (violation_count == 0
+                and reality_status in ('REPORTED', 'OPINION')):
+            # Check if any shopping keyword appears in core fields
+            searchable = " ".join([
+                item.get('headline', ''),
+                item.get('short_description', ''),
+            ]).lower()
+
+            has_shopping_keyword = any(kw in searchable for kw in _SHOPPING_KEYWORDS)
+
+            if not has_shopping_keyword:
+                print(
+                    f"  - PRE-KILL FILTER: Removed '{item.get('headline', 'N/A')}' — "
+                    f"zero violations, {reality_status}, no shopping keywords"
+                )
+                item['kill_gate'] = 'PRE_KILL'
+                item['kill_gate_reason'] = (
+                    f'No violations, {reality_status}, no shopping/commerce keywords'
+                )
+                continue
+
+        filtered.append(item)
+
+    print(f"  - Pre-kill filter: {len(filtered)}/{len(items)} items passed")
+    return filtered
+
+
 def validate_clusters_with_llm(
     items: List[Dict[str, Any]],
     clustering_result: Dict[str, Any]
@@ -945,12 +1008,63 @@ def validate_clusters_with_llm(
     return items
 
 
+def _kill_gate_eval_batch(
+    batch_items: List[Dict[str, Any]],
+    model
+) -> List[Dict[str, Any]]:
+    """
+    Evaluate a small batch of items through the kill gate LLM.
+
+    Args:
+        batch_items: Compact item dicts for evaluation (max ~5)
+        model: Gemini model to use
+
+    Returns:
+        List of verdict dicts, or None if parsing fails
+    """
+    prompt = get_kill_gate_prompt(json.dumps(batch_items, indent=2))
+    response = model.generate_content(
+        prompt,
+        generation_config={"response_mime_type": "application/json"}
+    )
+    return _parse_json_safe(response.text or "", expected_type=list)
+
+
+def _kill_gate_eval_single(item_eval: Dict[str, Any], model) -> Dict[str, Any]:
+    """
+    Evaluate a single item through the kill gate LLM (fallback for batch failures).
+
+    Args:
+        item_eval: Compact item dict for evaluation
+        model: Gemini model to use
+
+    Returns:
+        Verdict dict with headline, verdict, reason
+    """
+    try:
+        verdicts = _kill_gate_eval_batch([item_eval], model)
+        if verdicts and isinstance(verdicts, list) and len(verdicts) > 0:
+            v = verdicts[0]
+            if isinstance(v, dict) and 'verdict' in v:
+                return v
+    except Exception as e:
+        print(f"    - Single-item kill gate also failed for '{item_eval.get('headline', '?')}': {e}")
+
+    return {
+        'headline': item_eval.get('headline', ''),
+        'verdict': 'NEEDS_REVIEW',
+        'reason': 'Kill gate evaluation failed'
+    }
+
+
 def apply_kill_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Final kill gate: remove items where high relevance + no tensions +
     generic angle = actually not worth writing about.
 
-    Sends all items to the LLM in one batch for editorial judgment.
+    Processes items in small batches (max 5) to avoid JSON parsing failures
+    from oversized LLM responses. Falls back to per-item evaluation if a
+    batch fails.
 
     Args:
         items: List of items that have passed all prior filters
@@ -967,7 +1081,9 @@ def apply_kill_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         print("  - WARNING: No model available for kill gate")
         return items
 
-    # Build a compact representation for the LLM
+    BATCH_SIZE = 5
+
+    # Build compact representations keyed by headline for matching back
     items_for_eval = []
     for item in items:
         items_for_eval.append({
@@ -979,64 +1095,61 @@ def apply_kill_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             'quality_gate_detail': item.get('quality_gate_detail', ''),
         })
 
-    prompt = get_kill_gate_prompt(json.dumps(items_for_eval, indent=2))
+    # Process in batches
+    all_verdicts: Dict[str, Dict[str, Any]] = {}
+    for i in range(0, len(items_for_eval), BATCH_SIZE):
+        batch = items_for_eval[i:i + BATCH_SIZE]
+        batch_num = (i // BATCH_SIZE) + 1
+        total_batches = (len(items_for_eval) + BATCH_SIZE - 1) // BATCH_SIZE
+        print(f"  - Kill gate batch {batch_num}/{total_batches} ({len(batch)} items)...")
 
-    try:
-        response = model_to_use.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"}
-        )
-        raw_text = response.text or ""
+        try:
+            verdicts = _kill_gate_eval_batch(batch, model_to_use)
 
-        # Robust JSON extraction — handle LLM returning markdown-wrapped JSON
-        verdicts = _parse_json_safe(raw_text, expected_type=list)
+            if verdicts is None:
+                raise ValueError("Batch JSON parsing returned None")
 
-        if verdicts is None:
-            print(f"  - WARNING: Kill gate JSON parse failed. Marking all as NEEDS_REVIEW.")
-            for item in items:
-                item['kill_gate'] = 'NEEDS_REVIEW'
-                item['kill_gate_reason'] = 'Kill gate JSON parsing failed'
-            return items
+            # Map verdicts by headline
+            for v in verdicts:
+                if isinstance(v, dict) and 'headline' in v:
+                    all_verdicts[v['headline']] = v
 
-        # Build a lookup by headline (fuzzy match — LLM may truncate headlines)
-        verdict_map = {}
-        for v in verdicts:
-            if isinstance(v, dict):
-                verdict_map[v.get('headline', '')] = v
+        except Exception as e:
+            print(f"  - WARNING: Kill gate batch {batch_num} failed: {e}. Retrying per-item...")
+            for single_item in batch:
+                v = _kill_gate_eval_single(single_item, model_to_use)
+                all_verdicts[v.get('headline', single_item.get('headline', ''))] = v
 
-        survivors = []
-        for item in items:
-            headline = item.get('headline', 'N/A')
-            # Try exact match first, then substring match
-            verdict = verdict_map.get(headline)
-            if verdict is None:
-                for vk, vv in verdict_map.items():
-                    if vk and (vk in headline or headline in vk):
-                        verdict = vv
-                        break
-            if verdict is None:
-                verdict = {}
+    # Match verdicts back to items
+    survivors = []
+    for item in items:
+        headline = item.get('headline', 'N/A')
 
-            item['kill_gate'] = verdict.get('verdict', 'NEEDS_REVIEW')
-            item['kill_gate_reason'] = verdict.get('reason', 'No LLM verdict matched')
+        # Try exact match, then fuzzy substring match
+        verdict = all_verdicts.get(headline)
+        if verdict is None:
+            for vk, vv in all_verdicts.items():
+                if vk and (vk in headline or headline in vk):
+                    verdict = vv
+                    break
 
-            if item['kill_gate'] in ('KEEP', 'NEEDS_REVIEW'):
-                survivors.append(item)
-            else:
-                print(
-                    f"  - KILL GATE: Removed '{headline}' — "
-                    f"{verdict.get('reason', 'no reason')}"
-                )
-
-        print(f"  - Kill gate: {len(survivors)}/{len(items)} items survived")
-        return survivors
-
-    except Exception as e:
-        print(f"  - WARNING: Kill gate LLM call failed: {e}. Marking all as NEEDS_REVIEW.")
-        for item in items:
+        if verdict is None:
             item['kill_gate'] = 'NEEDS_REVIEW'
-            item['kill_gate_reason'] = f'Kill gate error: {e}'
-        return items
+            item['kill_gate_reason'] = 'No LLM verdict matched'
+        else:
+            item['kill_gate'] = verdict.get('verdict', 'NEEDS_REVIEW')
+            item['kill_gate_reason'] = verdict.get('reason', '')
+
+        if item['kill_gate'] in ('KEEP', 'NEEDS_REVIEW'):
+            survivors.append(item)
+        else:
+            print(
+                f"  - KILL GATE: Removed '{headline}' — "
+                f"{item.get('kill_gate_reason', 'no reason')}"
+            )
+
+    print(f"  - Kill gate: {len(survivors)}/{len(items)} items survived")
+    return survivors
 
 
 def write_to_google_sheet(
@@ -1441,7 +1554,14 @@ def main():
                 all_items_for_sheet, clustering_result
             )
 
-    # --- Gate 3: Final Kill Gate ---
+    # --- Gate 3a: Pre-Kill Filter (deterministic, no LLM call) ---
+    if all_items_for_sheet:
+        pre_filter_count = len(all_items_for_sheet)
+        all_items_for_sheet = apply_pre_kill_filter(all_items_for_sheet)
+        if len(all_items_for_sheet) < pre_filter_count:
+            print(f"Pre-kill filter: {len(all_items_for_sheet)}/{pre_filter_count} items passed")
+
+    # --- Gate 3b: Final Kill Gate (LLM-based) ---
     if all_items_for_sheet:
         pre_kill_count = len(all_items_for_sheet)
         all_items_for_sheet = apply_kill_gate(all_items_for_sheet)

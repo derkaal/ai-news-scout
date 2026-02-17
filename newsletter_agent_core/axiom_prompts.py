@@ -308,11 +308,16 @@ Your job is to flag items that passed earlier filters but are still NOT worth wr
 ## Items to evaluate:
 {items_json}
 
-Return ONLY valid JSON array (no markdown, no explanation outside JSON):
+## OUTPUT FORMAT (STRICT)
+Return ONLY a valid JSON array. No markdown, no code fences, no explanation outside the JSON.
+Every string value must be on a single line — no newlines inside strings.
+Escape any quotes inside strings with backslash.
+Use the EXACT headline from the input — do not rephrase or truncate it.
+
 [
   {{
-    "headline": "the item's headline",
-    "verdict": "KEEP" or "KILL",
-    "reason": "One sentence explaining the verdict"
+    "headline": "exact headline from input",
+    "verdict": "KEEP",
+    "reason": "One sentence, no newlines."
   }}
 ]"""
