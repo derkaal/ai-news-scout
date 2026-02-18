@@ -763,15 +763,25 @@ Concise Summary (max 3-5 sentences, strictly factual, no commentary):
 
 
 # Keywords that signal core agentic shopping (transactional, not just AI-adjacent)
+# CORE keywords: multi-word phrases that unambiguously signal agentic commerce transactions.
+# Single ambiguous words like "order", "bid", "transaction" are NOT included because
+# they match too broadly (e.g., "executive order", "bid for attention", "transaction disputes").
+# The classifier only searches headline + short_description (NOT linkedin_angle, which the
+# LLM writes and can contain any commerce word as commentary).
 _CORE_KEYWORDS = [
-    'payment', 'wallet', 'transaction', 'purchase', 'purchasing',
-    'checkout', 'buy', 'buying', 'order', 'ordering', 'procurement',
-    'negotiate', 'negotiation', 'bid', 'bidding', 'auction',
-    'agent wallet', 'agent payment', 'agent purchase',
-    'autonomous purchase', 'autonomous buying', 'auto-purchase',
-    'delegated spending', 'spending authority', 'budget delegation',
+    # Agent financial infrastructure
+    'agent wallet', 'agentic wallet', 'agent payment', 'agent purchase',
+    'agent checkout', 'agentic checkout', 'agentic transaction',
+    'agentic procurement', 'agentic commerce',
+    # Autonomous purchasing
+    'autonomous purchase', 'autonomous purchasing', 'autonomous buying',
+    'auto-purchase', 'delegated spending', 'spending authority',
+    'budget delegation', 'ai purchasing', 'ai shopping',
+    # Agent-to-agent
     'agent-to-agent', 'machine-to-machine commerce', 'm2m commerce',
-    'agentic checkout', 'agentic transaction', 'agentic procurement',
+    # Shopping-specific (must reference agents/AI + shopping together)
+    'shopping agent', 'shopping ai', 'ai agent.*checkout',
+    'ai agent.*purchase', 'ai agent.*transaction',
 ]
 
 
@@ -780,10 +790,13 @@ def classify_relevance_tier(item: Dict[str, Any]) -> str:
     Classify an item as CORE or ADJACENT based on whether it directly
     involves transactional agentic shopping mechanics.
 
-    CORE: Directly about payment authority, wallets, autonomous transactions,
+    CORE: Directly about payment authority, agent wallets, autonomous transactions,
           agent purchasing decisions, agent-to-agent commerce
     ADJACENT: Related to agentic commerce ecosystem but not directly transactional
-              (e.g., platform infrastructure, regulation, capabilities)
+              (e.g., platform infrastructure, regulation, capabilities, AI safety)
+
+    Only searches headline + short_description to avoid false positives from
+    LLM-generated commentary in linkedin_angle.
 
     Args:
         item: Extracted newsletter item dict
@@ -791,19 +804,128 @@ def classify_relevance_tier(item: Dict[str, Any]) -> str:
     Returns:
         "CORE" or "ADJACENT"
     """
-    # Build a searchable text from key fields
+    # Only search factual fields — NOT linkedin_angle (LLM commentary)
     searchable = " ".join([
         item.get('headline', ''),
         item.get('short_description', ''),
-        item.get('linkedin_angle', ''),
-        " ".join(item.get('technologies', [])),
     ]).lower()
 
     for kw in _CORE_KEYWORDS:
-        if kw in searchable:
+        if '.*' in kw:
+            # Regex pattern for keywords that need proximity matching
+            if re.search(kw, searchable):
+                return "CORE"
+        elif kw in searchable:
             return "CORE"
 
     return "ADJACENT"
+
+
+def deduplicate_by_master_headline(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Remove duplicate items that share the same underlying story.
+
+    Uses master_headline (normalized) as the dedup key. When duplicates
+    are found, keeps the item with the most violations (richest analysis).
+    Falls back to headline similarity check for items without master_headline.
+
+    Args:
+        items: List of extracted items, possibly from multiple newsletters
+
+    Returns:
+        Deduplicated list, keeping the best version of each story
+    """
+    if not items:
+        return items
+
+    def _normalize(text: str) -> str:
+        """Lowercase, strip punctuation, collapse whitespace."""
+        text = text.lower().strip()
+        text = re.sub(r'[^a-z0-9\s]', '', text)
+        text = re.sub(r'\s+', ' ', text)
+        return text
+
+    # Group items by normalized master_headline
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for item in items:
+        key = _normalize(
+            item.get('master_headline', item.get('headline', ''))
+        )
+        if not key:
+            key = _normalize(item.get('headline', 'unknown'))
+        groups.setdefault(key, []).append(item)
+
+    # Fuzzy matching: merge groups that clearly refer to the same story
+    _GENERIC_WORDS = {
+        'ai', 'agent', 'agents', 'agentic', 'launches', 'launch',
+        'new', 'for', 'the', 'and', 'in', 'on', 'of', 'to', 'with',
+        'introduces', 'unveils', 'announces', 'offers', 'platform',
+    }
+
+    def _is_same_story(a: str, b: str) -> bool:
+        """Check if two normalized headlines refer to the same story."""
+        words_a = set(a.split())
+        words_b = set(b.split())
+        if not words_a or not words_b:
+            return False
+        intersection = words_a & words_b
+        union = words_a | words_b
+        jaccard = len(intersection) / len(union) if union else 0.0
+
+        # Need high Jaccard AND shared distinctive words (not just generic terms)
+        distinctive_overlap = intersection - _GENERIC_WORDS
+        return jaccard >= 0.4 and len(distinctive_overlap) >= 1
+
+    keys = list(groups.keys())
+    merged = set()
+    for i, k1 in enumerate(keys):
+        if k1 in merged:
+            continue
+        for j, k2 in enumerate(keys):
+            if i >= j or k2 in merged:
+                continue
+            should_merge = False
+            # Check if one is a substantial substring of the other
+            if (len(k1) > 10 and len(k2) > 10 and
+                    (k1 in k2 or k2 in k1)):
+                should_merge = True
+            # Check word-level similarity with distinctive word requirement
+            elif _is_same_story(k1, k2):
+                should_merge = True
+
+            if should_merge:
+                # Merge k2 into k1
+                groups[k1].extend(groups[k2])
+                merged.add(k2)
+
+    for k in merged:
+        del groups[k]
+
+    # From each group, keep the item with the most violations (richest analysis)
+    deduped = []
+    for key, group in groups.items():
+        if len(group) == 1:
+            deduped.append(group[0])
+        else:
+            # Pick best: most violations > most tensions > first encountered
+            best = max(
+                group,
+                key=lambda x: (
+                    x.get('violation_count', 0),
+                    sum(1 for v in x.get('axiom_check', {}).values()
+                        if isinstance(v, dict) and v.get('judgment') == 'TENSION'),
+                )
+            )
+            deduped.append(best)
+            for dup in group:
+                if dup is not best:
+                    print(
+                        f"  - DEDUP: Removed '{dup.get('headline', 'N/A')}' "
+                        f"(duplicate of '{best.get('headline', 'N/A')}')"
+                    )
+
+    print(f"  - Deduplication: {len(deduped)}/{len(items)} unique items")
+    return deduped
 
 
 def apply_axiom_quality_filter(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -890,12 +1012,17 @@ def apply_axiom_quality_filter(items: List[Dict[str, Any]]) -> List[Dict[str, An
         # --- Tier-specific criteria ---
 
         if relevance_tier == 'CORE':
-            # CORE: lighter bar — need axiom engagement
+            # CORE: need axiom engagement AND structural substance
             axiom_engaged = (aligned_with_evidence >= 3 or tension_violation_count >= 1)
             if not axiom_engaged:
                 reject_reasons.append(
                     f"CORE but weak axiom engagement "
                     f"(aligned={aligned_with_evidence}, tv={tension_violation_count})"
+                )
+            # CORE with zero violations AND zero tensions = bland consensus
+            if violation_count_from_axioms == 0 and tension_count == 0:
+                reject_reasons.append(
+                    "CORE with zero violations AND zero tensions — no structural tension"
                 )
         else:
             # ADJACENT: harder bar — need real violations, not just tensions
@@ -932,7 +1059,14 @@ def apply_axiom_quality_filter(items: List[Dict[str, Any]]) -> List[Dict[str, An
 
 
 # Broader shopping/commerce keywords for pre-kill-gate check (superset of _CORE_KEYWORDS)
-_SHOPPING_KEYWORDS = _CORE_KEYWORDS + [
+# Broader shopping/commerce keywords for pre-kill-gate check.
+# These are simple substring matches (no regex) — used to detect any commerce connection.
+_SHOPPING_KEYWORDS = [
+    # Core transactional terms
+    'payment', 'wallet', 'transaction', 'purchase', 'purchasing',
+    'checkout', 'buy', 'buying', 'procurement', 'negotiate', 'negotiation',
+    'bid', 'bidding', 'auction', 'spending', 'budget',
+    # Broader commerce terms
     'shopping', 'commerce', 'retail', 'merchant', 'marketplace',
     'e-commerce', 'ecommerce', 'store', 'cart', 'price', 'pricing',
     'consumer', 'buyer', 'seller', 'vendor', 'supplier',
@@ -979,7 +1113,10 @@ def apply_pre_kill_filter(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         ]).lower()
 
         has_shopping_keyword = any(kw in searchable for kw in _SHOPPING_KEYWORDS)
-        has_core_keyword = any(kw in searchable for kw in _CORE_KEYWORDS)
+        has_core_keyword = any(
+            re.search(kw, searchable) if '.*' in kw else (kw in searchable)
+            for kw in _CORE_KEYWORDS
+        )
 
         # --- Tier 1: Hard filter — no shopping connection at all ---
         if (violation_count == 0
@@ -1130,7 +1267,10 @@ def _kill_gate_eval_batch(
     prompt = get_kill_gate_prompt(json.dumps(compact_batch, indent=2))
     response = model.generate_content(
         prompt,
-        generation_config={"response_mime_type": "application/json"}
+        generation_config={
+            "response_mime_type": "application/json",
+            "temperature": 0.1,  # Low temperature = strict, deterministic judgments
+        }
     )
     raw = response.text or ""
     result = _parse_json_safe(raw, expected_type=list)
@@ -1748,6 +1888,13 @@ def main():
             print(f"  - Added {len(extracted_items_from_llm)} relevant items from '{current_original_subject}' to master list.")
         else:
             print(f"  - Skipping newsletter '{current_original_subject}' (Relevance < 50 or no valid items extracted by LLM).")
+
+    # --- Gate 0: Deduplication by master_headline ---
+    if all_items_for_sheet:
+        pre_dedup_count = len(all_items_for_sheet)
+        all_items_for_sheet = deduplicate_by_master_headline(all_items_for_sheet)
+        if len(all_items_for_sheet) < pre_dedup_count:
+            print(f"Deduplication: {len(all_items_for_sheet)}/{pre_dedup_count} unique items")
 
     # --- Gate 1: Post-Axiom Quality Filter ---
     if all_items_for_sheet:
