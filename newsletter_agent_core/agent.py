@@ -808,12 +808,20 @@ def classify_relevance_tier(item: Dict[str, Any]) -> str:
 
 def apply_axiom_quality_filter(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Post-axiom filter with multiple criteria:
+    Post-axiom filter with tiered criteria based on relevance tier.
 
-    1. Axiom engagement: 3+ aligned with evidence OR 1+ tension/violation
-    2. OPINION items with zero violations are rejected (no structural tension)
-    3. Angle quality: linkedin_angle must be >100 chars and not GENERIC_ANGLE
-    4. Substance check: at least one of companies or technologies must be non-empty
+    CORE items (direct transaction mechanics) get a lighter bar:
+      - Must have axiom engagement (3+ aligned OR 1+ tension/violation)
+      - Must have angle quality (>100 chars, not GENERIC_ANGLE)
+
+    ADJACENT items (ecosystem, not transactional) get a harder bar:
+      - Must have at least 1 VIOLATION (not just tensions — tensions are cheap)
+      - Must have angle quality (>100 chars, not GENERIC_ANGLE)
+      - Must have substance (companies or technologies identified)
+
+    All items:
+      - OPINION/ANALYSIS with zero violations → rejected
+      - GENERIC_ANGLE → rejected
 
     Args:
         items: List of extracted items with axiom_check data
@@ -828,15 +836,17 @@ def apply_axiom_quality_filter(items: List[Dict[str, Any]]) -> List[Dict[str, An
     for item in items:
         axiom_check = item.get('axiom_check', {})
         reject_reasons = []
+        relevance_tier = item.get('relevance_tier', 'ADJACENT')
 
         if not axiom_check:
             item['quality_gate'] = 'NO_DATA'
             filtered.append(item)
             continue
 
-        # --- Criterion 1: Axiom engagement ---
+        # --- Count axiom judgments ---
         aligned_with_evidence = 0
-        tension_violation_count = 0
+        tension_count = 0
+        violation_count_from_axioms = 0
         na_count = 0
 
         for axiom_id, axiom_data in axiom_check.items():
@@ -847,26 +857,29 @@ def apply_axiom_quality_filter(items: List[Dict[str, Any]]) -> List[Dict[str, An
 
             if judgment == 'ALIGNED' and len(reason) > 10:
                 aligned_with_evidence += 1
-            elif judgment in ('TENSION', 'VIOLATION'):
-                tension_violation_count += 1
+            elif judgment == 'TENSION':
+                tension_count += 1
+            elif judgment == 'VIOLATION':
+                violation_count_from_axioms += 1
             elif judgment == 'N/A':
                 na_count += 1
 
-        axiom_engaged = (aligned_with_evidence >= 3 or tension_violation_count >= 1)
-        if not axiom_engaged:
-            reject_reasons.append(
-                f"weak axiom engagement (aligned={aligned_with_evidence}, "
-                f"tensions_violations={tension_violation_count})"
-            )
-
-        # --- Criterion 2: OPINION with no violations = no structural tension ---
+        tension_violation_count = tension_count + violation_count_from_axioms
         reality_status = item.get('reality_status', '')
         violation_count = item.get('violation_count', 0)
-        if reality_status == 'OPINION' and violation_count == 0:
-            reject_reasons.append("OPINION with zero violations — no structural tension")
-
-        # --- Criterion 3: Angle quality ---
         linkedin_angle = item.get('linkedin_angle', '')
+        companies = item.get('companies', [])
+        technologies = item.get('technologies', [])
+
+        # --- Universal criteria ---
+
+        # OPINION/ANALYSIS with zero violations = no structural tension
+        if reality_status in ('OPINION', 'ANALYSIS') and violation_count == 0:
+            reject_reasons.append(
+                f"{reality_status} with zero violations — no structural tension"
+            )
+
+        # Angle quality
         if linkedin_angle == 'GENERIC_ANGLE':
             reject_reasons.append("GENERIC_ANGLE — no non-obvious take found")
         elif len(linkedin_angle) < 100:
@@ -874,18 +887,35 @@ def apply_axiom_quality_filter(items: List[Dict[str, Any]]) -> List[Dict[str, An
                 f"weak angle ({len(linkedin_angle)} chars < 100 minimum)"
             )
 
-        # --- Criterion 4: Substance check ---
-        companies = item.get('companies', [])
-        technologies = item.get('technologies', [])
-        if not companies and not technologies:
-            reject_reasons.append("no companies AND no technologies identified")
+        # --- Tier-specific criteria ---
+
+        if relevance_tier == 'CORE':
+            # CORE: lighter bar — need axiom engagement
+            axiom_engaged = (aligned_with_evidence >= 3 or tension_violation_count >= 1)
+            if not axiom_engaged:
+                reject_reasons.append(
+                    f"CORE but weak axiom engagement "
+                    f"(aligned={aligned_with_evidence}, tv={tension_violation_count})"
+                )
+        else:
+            # ADJACENT: harder bar — need real violations, not just tensions
+            if violation_count_from_axioms < 1:
+                reject_reasons.append(
+                    f"ADJACENT with no VIOLATIONS "
+                    f"(tensions={tension_count} don't count for ADJACENT)"
+                )
+            # Must have substance
+            if not companies and not technologies:
+                reject_reasons.append(
+                    "ADJACENT with no companies AND no technologies"
+                )
 
         # --- Decision ---
         if not reject_reasons:
             item['quality_gate'] = 'PASS'
             item['quality_gate_detail'] = (
-                f"aligned={aligned_with_evidence}, "
-                f"tensions_violations={tension_violation_count}, "
+                f"tier={relevance_tier}, aligned={aligned_with_evidence}, "
+                f"tensions={tension_count}, violations={violation_count_from_axioms}, "
                 f"angle_len={len(linkedin_angle)}"
             )
             filtered.append(item)
@@ -1093,6 +1123,7 @@ def _kill_gate_eval_batch(
             'short_description': (item.get('short_description', '') or '')[:200],
             'reality_status': item.get('reality_status', 'N/A'),
             'violation_count': item.get('violation_count', 0),
+            'relevance_tier': item.get('relevance_tier', 'ADJACENT'),
             'linkedin_angle': (item.get('linkedin_angle', '') or '')[:150],
         })
 
@@ -1170,8 +1201,8 @@ def apply_kill_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             'short_description': item.get('short_description', 'N/A'),
             'reality_status': item.get('reality_status', 'N/A'),
             'violation_count': item.get('violation_count', 0),
+            'relevance_tier': item.get('relevance_tier', 'ADJACENT'),
             'linkedin_angle': item.get('linkedin_angle', 'N/A'),
-            'quality_gate_detail': item.get('quality_gate_detail', ''),
         })
 
     # Process in batches
@@ -1228,6 +1259,117 @@ def apply_kill_gate(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             )
 
     print(f"  - Kill gate: {len(survivors)}/{len(items)} items survived")
+    return survivors
+
+
+# --- Hard Cap Configuration ---
+HARD_CAP_MAX_ITEMS = 8  # Absolute maximum after all gates
+HARD_CAP_TARGET_ITEMS = 5  # Ideal target number
+
+
+def _compute_item_score(item: Dict[str, Any]) -> float:
+    """
+    Compute a composite quality score for ranking items when a hard cap
+    is needed. Higher score = better item.
+
+    Scoring factors:
+      - CORE tier: +3.0 (vs ADJACENT: +0.0)
+      - Violation count: +1.0 per violation (structural tension = interesting)
+      - Tension count: +0.3 per tension
+      - CONFIRMED reality: +2.0, REPORTED: +1.0, ANALYSIS: +0.5
+      - LinkedIn angle quality: +1.0 if >150 chars, +0.5 if >100 chars
+      - Companies named: +0.5 if any
+      - Kill gate KEEP: +1.0 (vs NEEDS_REVIEW: +0.0)
+
+    Args:
+        item: Newsletter item dict with all metadata
+
+    Returns:
+        Float score for ranking
+    """
+    score = 0.0
+
+    # Relevance tier — CORE items get a big bonus
+    if item.get('relevance_tier') == 'CORE':
+        score += 3.0
+
+    # Axiom engagement — violations are gold, tensions are silver
+    axiom_check = item.get('axiom_check', {})
+    for axiom_id, axiom_data in axiom_check.items():
+        if not isinstance(axiom_data, dict):
+            continue
+        judgment = axiom_data.get('judgment', 'N/A')
+        if judgment == 'VIOLATION':
+            score += 1.0
+        elif judgment == 'TENSION':
+            score += 0.3
+
+    # Reality status — confirmed > reported > opinion/analysis
+    reality_status = item.get('reality_status', '')
+    if reality_status == 'CONFIRMED':
+        score += 2.0
+    elif reality_status == 'REPORTED':
+        score += 1.0
+    elif reality_status == 'ANALYSIS':
+        score += 0.5
+
+    # LinkedIn angle quality
+    angle = item.get('linkedin_angle', '')
+    if angle and angle != 'GENERIC_ANGLE':
+        if len(angle) > 150:
+            score += 1.0
+        elif len(angle) > 100:
+            score += 0.5
+
+    # Companies named = concrete, not abstract
+    if item.get('companies'):
+        score += 0.5
+
+    # Kill gate verdict
+    if item.get('kill_gate') == 'KEEP':
+        score += 1.0
+
+    return score
+
+
+def apply_hard_cap(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Final safety net: if all quality gates still let through more than
+    HARD_CAP_MAX_ITEMS, rank by composite score and keep only the top N.
+
+    This ensures the newsletter NEVER exceeds the target range regardless
+    of how lenient earlier gates were on a particular week.
+
+    Args:
+        items: List of items that survived all prior gates
+
+    Returns:
+        Top-ranked items, capped at HARD_CAP_MAX_ITEMS
+    """
+    if len(items) <= HARD_CAP_MAX_ITEMS:
+        return items
+
+    # Score every item
+    scored = [(item, _compute_item_score(item)) for item in items]
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    # Keep top items
+    survivors = []
+    for item, score in scored[:HARD_CAP_MAX_ITEMS]:
+        item['hard_cap_score'] = round(score, 2)
+        survivors.append(item)
+
+    # Log what got cut
+    for item, score in scored[HARD_CAP_MAX_ITEMS:]:
+        print(
+            f"  - HARD CAP: Removed '{item.get('headline', 'N/A')}' "
+            f"(score={score:.2f}, tier={item.get('relevance_tier', '?')})"
+        )
+
+    print(
+        f"  - Hard cap: {len(survivors)}/{len(items)} items kept "
+        f"(max={HARD_CAP_MAX_ITEMS})"
+    )
     return survivors
 
 
@@ -1645,6 +1787,13 @@ def main():
         pre_kill_count = len(all_items_for_sheet)
         all_items_for_sheet = apply_kill_gate(all_items_for_sheet)
         print(f"Kill gate: {len(all_items_for_sheet)}/{pre_kill_count} items survived")
+
+    # --- Gate 4: Hard Cap (deterministic, score-based) ---
+    if all_items_for_sheet:
+        pre_cap_count = len(all_items_for_sheet)
+        all_items_for_sheet = apply_hard_cap(all_items_for_sheet)
+        if len(all_items_for_sheet) < pre_cap_count:
+            print(f"Hard cap: {len(all_items_for_sheet)}/{pre_cap_count} items kept (max={HARD_CAP_MAX_ITEMS})")
 
     # --- Prepare sheet rows ---
     if all_items_for_sheet:
