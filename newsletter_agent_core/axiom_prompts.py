@@ -329,3 +329,41 @@ Use the EXACT headline from the input — do not rephrase or truncate it.
     "reason": "One sentence, no newlines."
   }}
 ]"""
+
+
+def get_weekly_synthesis_prompt(items_json: str) -> str:
+    """
+    Generate a prompt that takes the top surviving items and produces
+    a 3-sentence 'Weekly Synthesis' tying them into a narrative arc.
+
+    Args:
+        items_json: JSON string of the top items (max 5) with headline,
+                    short_description, relevance_tier, violation_count,
+                    and linkedin_angle fields
+
+    Returns:
+        Complete prompt string for weekly synthesis generation
+    """
+    return f"""You are the editor-in-chief of a weekly newsletter about **agentic commerce** — AI agents that autonomously purchase, transact, and negotiate on behalf of principals.
+
+You have just selected this week's top stories. Your task is to write a **Weekly Synthesis** — exactly 3 sentences that weave these items into a single narrative arc.
+
+## Rules:
+1. **Exactly 3 sentences.** No more, no less.
+2. The first sentence establishes the week's dominant theme or tension.
+3. The second sentence connects two or more items to reveal a pattern, contradiction, or acceleration that none of them show individually.
+4. The third sentence poses a forward-looking implication or question that a senior executive should be thinking about next week.
+5. **Be specific** — name companies, mechanisms, or tensions from the items. No generic "the landscape is evolving" filler.
+6. **No bullet points, no headers, no markdown** — just 3 plain sentences.
+7. Write for a reader who has NOT yet read the individual items — the synthesis should stand on its own as an executive briefing.
+
+## This week's top items:
+{items_json}
+
+## OUTPUT FORMAT (STRICT)
+Return ONLY valid JSON. No markdown, no code fences, no explanation outside the JSON.
+
+{{
+  "weekly_synthesis": "Exactly 3 sentences. No newlines inside this string.",
+  "narrative_theme": "2-5 word label for this week's dominant theme"
+}}"""

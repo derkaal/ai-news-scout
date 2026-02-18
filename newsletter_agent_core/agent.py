@@ -26,7 +26,8 @@ from newsletter_agent_core.axiom_prompts import (
     get_axiom_analysis_prompt,
     get_simple_extraction_prompt,
     get_cluster_validation_prompt,
-    get_kill_gate_prompt
+    get_kill_gate_prompt,
+    get_weekly_synthesis_prompt
 )
 
 # Clustering engine imports
@@ -1513,6 +1514,196 @@ def apply_hard_cap(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return survivors
 
 
+def generate_weekly_synthesis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Take the top items (by _compute_item_score) and generate a 3-sentence
+    Weekly Synthesis that ties them together into a narrative arc.
+
+    Args:
+        items: Final list of items that survived all gates
+
+    Returns:
+        Dict with 'weekly_synthesis' and 'narrative_theme' keys,
+        or empty dict if generation fails
+    """
+    if not items:
+        return {}
+
+    model_to_use = (cheap_model if USE_CHEAP_MODEL_FOR_SCREENING
+                    else global_model_for_tools)
+    if model_to_use is None:
+        print("  - WARNING: No model available for weekly synthesis")
+        return {}
+
+    # Rank by score and take top 5
+    scored = [(item, _compute_item_score(item)) for item in items]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    top_items = scored[:5]
+
+    # Build compact item representations for the prompt
+    compact_items = []
+    for item, score in top_items:
+        compact_items.append({
+            'headline': item.get('headline', 'N/A'),
+            'short_description': (item.get('short_description', '') or '')[:250],
+            'relevance_tier': item.get('relevance_tier', 'N/A'),
+            'violation_count': item.get('violation_count', 0),
+            'reality_status': item.get('reality_status', 'N/A'),
+            'companies': item.get('companies', []),
+            'linkedin_angle': (item.get('linkedin_angle', '') or '')[:200],
+            'write_priority_score': round(score, 2),
+        })
+
+    prompt = get_weekly_synthesis_prompt(json.dumps(compact_items, indent=2))
+
+    try:
+        response = model_to_use.generate_content(
+            prompt,
+            generation_config={
+                "response_mime_type": "application/json",
+                "temperature": 0.3,  # Slightly creative but controlled
+            }
+        )
+        raw = response.text or ""
+        result = _parse_json_safe(raw, expected_type=dict)
+
+        if result and 'weekly_synthesis' in result:
+            print(f"  - Weekly synthesis generated: theme='{result.get('narrative_theme', 'N/A')}'")
+            return result
+        else:
+            print(f"  - WARNING: Weekly synthesis JSON missing 'weekly_synthesis' key")
+            return {}
+
+    except Exception as e:
+        print(f"  - WARNING: Weekly synthesis generation failed: {e}")
+        return {}
+
+
+def _ensure_synthesis_sheet_exists(spreadsheet_id: str) -> bool:
+    """
+    Ensure the 'Synthesis' sheet tab exists in the spreadsheet.
+    Creates it if it doesn't exist.
+
+    Args:
+        spreadsheet_id: Google Sheet ID
+
+    Returns:
+        True if the sheet exists (or was created), False on error
+    """
+    try:
+        service = get_sheets_service()
+        # Check if 'Synthesis' tab already exists
+        spreadsheet = service.spreadsheets().get(
+            spreadsheetId=spreadsheet_id
+        ).execute()
+
+        sheet_names = [
+            s['properties']['title']
+            for s in spreadsheet.get('sheets', [])
+        ]
+
+        if 'Synthesis' in sheet_names:
+            return True
+
+        # Create the 'Synthesis' sheet tab
+        request_body = {
+            'requests': [{
+                'addSheet': {
+                    'properties': {
+                        'title': 'Synthesis',
+                        'index': 1,  # Second tab (after Sheet1)
+                    }
+                }
+            }]
+        }
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body=request_body
+        ).execute()
+        print("  - Created 'Synthesis' sheet tab")
+        return True
+
+    except HttpError as error:
+        print(f"  - ERROR creating Synthesis sheet: {error}")
+        return False
+    except Exception as e:
+        print(f"  - UNEXPECTED ERROR creating Synthesis sheet: {e}")
+        return False
+
+
+def write_synthesis_to_sheet(
+    spreadsheet_id: str,
+    synthesis: Dict[str, Any],
+    item_count: int
+) -> str:
+    """
+    Write the Weekly Synthesis to the 'Synthesis' sheet tab.
+
+    Appends a new row with: Date, Narrative Theme, Weekly Synthesis, Item Count.
+    Creates the 'Synthesis' tab and headers if they don't exist.
+
+    Args:
+        spreadsheet_id: Google Sheet ID
+        synthesis: Dict with 'weekly_synthesis' and 'narrative_theme'
+        item_count: Number of items that survived all gates
+
+    Returns:
+        Status message string
+    """
+    if not synthesis or 'weekly_synthesis' not in synthesis:
+        return "No synthesis to write"
+
+    if not _ensure_synthesis_sheet_exists(spreadsheet_id):
+        return "Failed to create Synthesis sheet tab"
+
+    try:
+        service = get_sheets_service()
+        synthesis_date = datetime.now().strftime("%Y-%m-%d")
+
+        # Check if headers exist
+        try:
+            result = service.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range='Synthesis!A1:D1'
+            ).execute()
+            has_headers = bool(result.get('values', []))
+        except Exception:
+            has_headers = False
+
+        rows_to_write = []
+        if not has_headers:
+            rows_to_write.append([
+                "Date", "Narrative Theme", "Weekly Synthesis", "Item Count"
+            ])
+
+        rows_to_write.append([
+            synthesis_date,
+            synthesis.get('narrative_theme', 'N/A'),
+            synthesis.get('weekly_synthesis', 'N/A'),
+            str(item_count),
+        ])
+
+        body = {'values': rows_to_write}
+        result = service.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range='Synthesis!A:D',
+            valueInputOption='RAW',
+            insertDataOption='INSERT_ROWS',
+            body=body
+        ).execute()
+
+        updated_cells = result.get('updates', {}).get('updatedCells', 0)
+        print(f"  - Wrote weekly synthesis to Synthesis sheet ({updated_cells} cells)")
+        return f"Weekly synthesis written to Synthesis sheet ({updated_cells} cells)"
+
+    except HttpError as error:
+        print(f"  - ERROR writing synthesis to sheet: {error}")
+        return f"Failed to write synthesis: {error}"
+    except Exception as e:
+        print(f"  - UNEXPECTED ERROR writing synthesis: {e}")
+        return f"Failed to write synthesis: {e}"
+
+
 def write_to_google_sheet(
     spreadsheet_id: str,
     data: List[List[str]]
@@ -1942,6 +2133,12 @@ def main():
         if len(all_items_for_sheet) < pre_cap_count:
             print(f"Hard cap: {len(all_items_for_sheet)}/{pre_cap_count} items kept (max={HARD_CAP_MAX_ITEMS})")
 
+    # --- Weekly Synthesis (LLM-generated narrative arc) ---
+    weekly_synthesis = {}
+    if all_items_for_sheet:
+        print("Generating weekly synthesis...")
+        weekly_synthesis = generate_weekly_synthesis(all_items_for_sheet)
+
     # --- Prepare sheet rows ---
     if all_items_for_sheet:
         sheet_rows = []
@@ -1966,11 +2163,23 @@ def main():
             data=data_to_write
         )
 
+        # Write weekly synthesis to the 'Synthesis' sheet tab
+        synthesis_status = ""
+        if weekly_synthesis:
+            synthesis_status = write_synthesis_to_sheet(
+                spreadsheet_id=GOOGLE_SHEET_ID,
+                synthesis=weekly_synthesis,
+                item_count=len(all_items_for_sheet)
+            )
+
         # Build status message
         status_message = f"Newsletter processing complete. {write_status}."
         if clustering_result and clustering_result.get('clustering_applied', False):
             cr = clustering_result['clustering_result']
             status_message += f" Clustering: {cr['total_clusters']} clusters, {cr['noise_items']} noise items."
+        if weekly_synthesis:
+            theme = weekly_synthesis.get('narrative_theme', 'N/A')
+            status_message += f" Weekly synthesis: '{theme}'. {synthesis_status}."
         status_message += " Check your Google Sheet."
 
         print(f"Final newsletter processing status: {status_message}")
